@@ -99,6 +99,7 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Date:** 2026-10-15 · **Status:** Proposed · **By:** Claude
 - **Decision:** Build the exposure subgraph with capacity 1 on fixable `DEPENDS_ON` edges and a very high capacity on unfixable ones. Run `algo.maxFlow` from repos to the vulnerable version, then derive the min cut from the residual graph in Python. Keep a greedy "edge on most paths" fallback.
 - **Reason:** Max flow equals min cut, so FalkorDB's own algorithm computes the "fewest fixes" answer. That is a real graph algorithm doing the product's key job. `algo.maxFlow` returns per-edge flows but not the cut itself, so the residual step is ours, and the fallback covers surprises.
+- **Check (2026-10-15):** `algo.maxFlow` ran on `falkordb/falkordb:latest` with the config above and returned the correct value on a test graph.
 
 ### D-014: Submit by Sat 8 PM IST with a fixed cut line
 - **Date:** 2026-10-15 · **Status:** Proposed · **By:** Claude
