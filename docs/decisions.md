@@ -26,8 +26,9 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 | D-014 | 2026-10-15 | Submit by Sat 8 PM IST (4 h buffer) with a fixed cut line | Proposed | Claude |
 | D-015 | 2026-10-15 | Solo build; scope sized for one person | Accepted | Bobby |
 | D-016 | 2026-10-15 | Agent framework: Anthropic SDK tool runner over our own MCP server, no LangChain/LangGraph | Proposed | Claude |
-| D-017 | 2026-10-15 | Model `claude-opus-5-5` with server-side refusal fallback | Proposed | Claude |
+| D-017 | 2026-10-15 | Model `claude-opus-5-5` with server-side refusal fallback | Superseded by D-019 | Claude |
 | D-018 | 2026-10-15 | Public GitHub repo `bhargav-2644/blast-radius`, created by Bobby | Accepted | Bobby |
+| D-019 | 2026-10-15 | Agent model is `claude-sonnet-5` | Accepted | Bobby |
 
 ## Entries
 
@@ -118,7 +119,7 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Alternatives:** LangGraph (state machines and checkpoints we don't need; graph-memory there would compete with FalkorDB's role); LangChain FalkorDB integration (hides the Cypher we must show); Claude Agent SDK (built for coding/filesystem agents, overkill here); Managed Agents (hosted sandbox not needed; our tools must reach our FalkorDB).
 
 ### D-017: Model `claude-opus-5-5` with refusal fallback
-- **Date:** 2026-10-15 · **Status:** Proposed · **By:** Claude
+- **Date:** 2026-10-15 · **Status:** Superseded by D-019 · **By:** Claude
 - **Decision:** Use `claude-opus-5-5` with adaptive thinking and an explicit effort setting, plus the server-side `fallbacks: "default"` option so a safety-classifier refusal (more likely on security topics like CVEs) retries on another model instead of failing the demo.
 - **Reason:** It is the current default and the strongest model at tool selection. The CVE domain sits near the "cyber" safety category, so the fallback protects the live demo. If API cost matters, `claude-sonnet-5-5` is a one-line switch; that is Bobby's call.
 
@@ -126,6 +127,12 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Date:** 2026-10-15 · **Status:** Accepted · **By:** Bobby
 - **Decision:** Code lives in a new public GitHub repo, `blast-radius`, under Bobby's account. Bobby creates the empty repo; Claude pushes the scaffold. `docs/decisions.md` in the repo becomes the copy of this log.
 - **Reason:** A public repo is a submission requirement (Rule 10). This cloud session isn't allowed to create repositories itself, so Bobby makes it with one click.
+
+### D-019: Agent model is `claude-sonnet-5`
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Bobby
+- **Decision:** The agent uses `claude-sonnet-5`, with adaptive thinking. It replaces D-017. The model ID is kept in one config value (`CLAUDE_MODEL`) so it's a one-line change later.
+- **Reason:** Bobby's choice. Sonnet costs about half as much per token as Opus 5.5 ($2/$10 vs $4/$20 per million tokens), which matters for a demo that judges will run live, and it is strong at tool selection.
+- **Notes:** The server-side refusal fallback isn't offered for Sonnet 5, so the agent handles a `refusal` stop reason itself by telling the user, rather than failing silently. `claude-sonnet-5-5` is the newer Sonnet at the same price, if we ever want to switch.
 
 <!-- Template for new entries:
 ### D-0NN: <short title>
