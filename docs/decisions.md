@@ -240,6 +240,7 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Date:** 2026-10-15 · **Status:** Accepted · **By:** Bobby
 - **Decision:** The app runs as Render web service `blast-radius` (free plan, Docker, branch `main`, auto-deploy on push) at https://blast-radius-0sou.onrender.com, created through the Render connector. It talks to a FalkorDB Cloud instance in AWS ap-south-1. Secrets (FalkorDB username/password, `ANTHROPIC_API_KEY`) were entered by Bobby in Render's dashboard and are not in the repo or chat. The first start built the graph in FalkorDB Cloud in 24 s (14 services, 7,643 package versions, 1,125 advisories).
 - **Reason:** Render is the first environment where agent mode can run, because cloud build sessions cannot see an Anthropic key. The connector cannot set `healthCheckPath`, so `/healthz` is set by hand in Render's settings. The repo is private, so Render's GitHub app needed access to it.
+- **Verified:** 2026-10-15 20:01 UTC, Bobby ran agent mode on the live URL (question on GHSA-fjxv-7rqg-78g4). Render logs show `POST /api/run` 200 and three Claude API calls, all 200, with the answer finished in about 25 s and no errors. A restart found the graph already in FalkorDB Cloud and skipped the rebuild.
 - **Alternatives:** Render Singapore would sit closer to the Mumbai database than Oregon; we kept Oregon unless the demo feels slow, since a region change means recreating the service.
 
 <!-- Template for new entries:
