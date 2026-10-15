@@ -463,6 +463,7 @@ function handle(ev) {
       break; }
     case "graph": growGraph(ev); break;
     case "usage": T.tokens = (ev.input_tokens || 0) + (ev.output_tokens || 0) + (ev.cache_read_input_tokens || 0); meters(); break;
+    case "notice": feed(`<div class="banner">${esc(ev.message)}</div>`); break;
     case "error": inTurn(`<div class="errbox"><b>Run failed.</b> ${esc(ev.message)}</div>`); break;
     case "done": {
       if (T.text) T.text.classList.remove("live");

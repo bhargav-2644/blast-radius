@@ -42,6 +42,9 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 | D-030 | 2026-10-15 | Web UI: one static page served by FastAPI, JS libraries vendored | Accepted | Claude |
 | D-031 | 2026-10-15 | Every agent step streams to the UI as an event, including each Cypher query with params, timing and row count | Accepted | Bobby (ask), Claude |
 | D-032 | 2026-10-15 | Biomni-inspired three-pane UI: sessions and tool toggles, live executor, plan plus growing graph | Accepted | Bobby (ask), Claude |
+| D-033 | 2026-10-15 | Commit a filtered OSV snapshot (1.9 MB) so deploys build the graph without the 220 MB dump | Accepted | Claude |
+| D-034 | 2026-10-15 | Public-demo guards: agent rate limits with pipeline fallback, capped live sessions, no issue token | Accepted | Claude |
+| D-035 | 2026-10-15 | Host on FalkorDB Cloud (graph) + Render (app container) | Accepted | Bobby |
 
 ## Entries
 
@@ -217,6 +220,21 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Date:** 2026-10-15 · **Status:** Accepted · **By:** Bobby (ask), Claude
 - **Decision:** The page is rebuilt around the live run, following Stanford's Biomni agent UI, which Bobby pointed to. The left pane holds sessions, the MCP tools with on/off toggles (a disabled tool is withheld from the model), and the Agent/Pipeline mode. The centre is the executor: each tool call is a collapsible card with Input, Cypher and Output tabs; thinking streams in its own card; the answer streams as markdown; meters show tool calls, graph queries, time in FalkorDB and tokens. The right pane shows the live plan checklist above tabs for the growing graph, findings (exposure, customers, least-effort fix with the approve-to-open-issue button), decisions with drift re-check, and the raw event log.
 - **Reason:** Biomni shows its reasoning, code and results as the agent works, which is what Bobby wants for a developer audience. Its site is blocked from our build environment, so the layout follows Biomni's public documentation rather than its live page. It stays one static page (D-030).
+
+### D-033: Committed advisory snapshot
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
+- **Decision:** `scripts/snapshot_osv.py` keeps only the OSV advisories that name a package in our lockfiles or scenarios (1,190 of the npm dump) and writes them, unchanged, to `data/osv/npm-snapshot.zip` (1.9 MB, committed). The loader reads the snapshot by default; `--osv` points it at the full dump.
+- **Reason:** A fresh container must build the graph on its own, and downloading and scanning 220 MB on every deploy is slow and fragile. The snapshot gives identical results (1,125 advisories, 1,074 AFFECTS edges) and cuts a rebuild from ~12 s to ~2 s. The data stays real OSV records, refreshable with one command.
+
+### D-034: Guards for a public demo
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
+- **Decision:** Agent-mode runs are capped per client IP per hour (15) and per day overall (300); past the cap a run falls back to the pipeline and the UI says why. Idle sessions beyond `MAX_LIVE_SESSIONS` (3 on Render's free plan) close their MCP tool process but keep their transcript. The deploy leaves `GITHUB_TOKEN` unset, so "Open issue" shows the draft rather than filing. Each MCP connection is now owned by one task, because anyio refused to close a session from a different request.
+- **Reason:** A public URL invites anyone to spend the API key and to file issues. Each tool process uses about 90 MB, and the free plan has 512 MB. Falling back to the pipeline keeps the demo working when the budget runs out.
+
+### D-035: FalkorDB Cloud + Render
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Bobby
+- **Decision:** The graph runs on a free FalkorDB Cloud instance. The app runs on Render from `render.yaml` (Docker, free plan, `/healthz` check) and builds the graph on first start (`blast_radius.seed`).
+- **Reason:** Hosting the graph on FalkorDB's own cloud shows the graph is central to the product, and both tiers are free. The container also runs anywhere with `docker compose --profile app up`.
 
 <!-- Template for new entries:
 ### D-0NN: <short title>

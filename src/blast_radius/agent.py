@@ -69,15 +69,33 @@ class Agent:
         self._emit = None  # set per run: where tool events go
 
     async def __aenter__(self):
-        params = StdioServerParameters(command=sys.executable, args=["-m", "blast_radius.mcp_server"])
-        read, write = await self._stack.enter_async_context(stdio_client(params))
-        self._session = await self._stack.enter_async_context(ClientSession(read, write))
-        await self._session.initialize()
-        self.mcp_tools = (await self._session.list_tools()).tools
+        # The MCP client's anyio scopes must be opened and closed in the same task, but a web server
+        # opens a session in one request and may close it from another. So one task owns the
+        # connection for its whole life, and closing just signals it.
+        self._ready, self._closing = asyncio.Event(), asyncio.Event()
+        self._owner = asyncio.create_task(self._hold_connection())
+        await asyncio.wait({self._owner, asyncio.create_task(self._ready.wait())},
+                           return_when=asyncio.FIRST_COMPLETED)
+        if self._owner.done():
+            self._owner.result()  # re-raise the connection error
         return self
 
+    async def _hold_connection(self):
+        # pass our environment through: the MCP SDK otherwise gives the subprocess only a few safe
+        # variables, and the tool server needs FALKORDB_* to reach the same graph
+        params = StdioServerParameters(command=sys.executable, args=["-m", "blast_radius.mcp_server"],
+                                       env=dict(os.environ))
+        async with self._stack:
+            read, write = await self._stack.enter_async_context(stdio_client(params))
+            self._session = await self._stack.enter_async_context(ClientSession(read, write))
+            await self._session.initialize()
+            self.mcp_tools = (await self._session.list_tools()).tools
+            self._ready.set()
+            await self._closing.wait()
+
     async def __aexit__(self, *exc):
-        await self._stack.aclose()
+        self._closing.set()
+        await self._owner
 
     # ------------------------------------------------------------- tools
 
@@ -198,8 +216,11 @@ class Agent:
 
         await mark(0, "in_progress")
         ref = re.search(r"(GHSA-[\w-]{14}|CVE-\d{4}-\d+)", question, re.I)
-        hits = await self.call("find_vulnerability", {"query": ref.group(1).upper() if ref else question})
-        if not hits:
+        # GHSA ids are lowercase after the prefix, CVE ids uppercase
+        query = (ref.group(1)[:5].upper() + (ref.group(1)[5:].lower() if ref.group(1).upper().startswith("GHSA")
+                 else ref.group(1)[5:].upper())) if ref else question
+        hits = await self.call("find_vulnerability", {"query": query})
+        if not isinstance(hits, list) or not hits:
             await mark(0, "done")
             await say("I couldn't match that to an advisory in the graph. Try a GHSA or CVE id.")
             await emit({"type": "done", "answer": "", "refused": False})

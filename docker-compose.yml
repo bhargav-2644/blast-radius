@@ -6,5 +6,16 @@ services:
       - "3000:3000"   # FalkorDB Browser
     volumes:
       - falkordb-data:/var/lib/falkordb/data
+  app:
+    build: .
+    profiles: ["app"]   # `docker compose --profile app up` runs the web app too
+    ports:
+      - "8000:8000"
+    environment:
+      FALKORDB_HOST: falkordb
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+    depends_on:
+      - falkordb
 volumes:
   falkordb-data:

@@ -28,7 +28,7 @@ def _run(g, query: str, rows: list[dict]):
         g.query(query, {"rows": chunk})
 
 
-def build(osv_zip: Path = DATA / "raw/npm-osv.zip", deploys: dict[str, Path] | None = None) -> dict:
+def build(osv_zip: Path = DATA / "osv/npm-snapshot.zip", deploys: dict[str, Path] | None = None) -> dict:
     """Rebuild the graph. `deploys` swaps in a different lockfile for a service, to simulate a
     deploy (e.g. data/scenarios/storefront-adds-koa-router.json.gz) and watch decisions drift."""
     deploys = deploys or {}
@@ -178,5 +178,7 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--deploy", action="append", default=[], metavar="SERVICE=LOCKFILE.json.gz",
                     help="load a different lockfile for one service (simulated deploy)")
+    ap.add_argument("--osv", type=Path, default=DATA / "osv/npm-snapshot.zip",
+                    help="OSV npm zip: the committed snapshot (default) or the full dump from scripts/fetch_osv.sh")
     args = ap.parse_args()
-    print(json.dumps(build(deploys=dict(d.split("=", 1) for d in args.deploy)), indent=1))
+    print(json.dumps(build(args.osv, deploys=dict(d.split("=", 1) for d in args.deploy)), indent=1))

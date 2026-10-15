@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -23,17 +23,28 @@ from blast_radius.mcp_server import draft_issue
 STATIC = Path(__file__).parent / "static"
 ISSUE_REPO = os.getenv("ISSUE_REPO", "bhargav-2644/blast-radius")  # never upstream projects (D-027)
 sessions: dict = {}  # session id -> agent, transcript of events, graph state
+# Public-demo guards (D-034): each live session holds an MCP subprocess, and agent runs spend API credit.
+MAX_LIVE_SESSIONS = int(os.getenv("MAX_LIVE_SESSIONS", "12"))
+AGENT_RUNS_PER_HOUR_PER_IP = int(os.getenv("AGENT_RUNS_PER_HOUR_PER_IP", "15"))
+AGENT_RUNS_PER_DAY = int(os.getenv("AGENT_RUNS_PER_DAY", "300"))
+agent_runs: list[tuple[float, str]] = []  # (time, client ip) of recent agent-mode runs
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
     for s in sessions.values():
-        await s["agent"].__aexit__(None, None, None)
+        if s["agent"]:
+            await s["agent"].__aexit__(None, None, None)
 
 
 app = FastAPI(title="Blast Radius", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True, "nodes": {r["label"]: r["count"] for r in analysis._rows("graph_stats")}}
 
 
 @app.get("/")
@@ -182,8 +193,35 @@ def get_session(sid: str):
     return {"id": sid, "title": sessions[sid]["title"], "events": sessions[sid]["events"]}
 
 
+def _client_ip(request: Request) -> str:
+    # behind a host's proxy (Render, Fly) the real client is the first X-Forwarded-For entry
+    fwd = request.headers.get("x-forwarded-for")
+    return fwd.split(",")[0].strip() if fwd else (request.client.host if request.client else "?")
+
+
+def _agent_allowed(ip: str) -> str | None:
+    """None if this client may run the LLM agent now, else the reason it falls back to the pipeline."""
+    now = time.time()
+    agent_runs[:] = [(t, a) for t, a in agent_runs if now - t < 86400]
+    if len(agent_runs) >= AGENT_RUNS_PER_DAY:
+        return "The demo's daily agent budget is used up"
+    if sum(1 for t, a in agent_runs if a == ip and now - t < 3600) >= AGENT_RUNS_PER_HOUR_PER_IP:
+        return "You've hit this demo's hourly agent limit"
+    agent_runs.append((now, ip))
+    return None
+
+
+async def _evict_idle_sessions():
+    """Close the MCP connection of the oldest idle sessions beyond the cap. Transcripts are kept,
+    and a closed session reconnects (with fresh model context) if it is used again."""
+    live = [(s["last"], sid) for sid, s in sessions.items() if s["agent"] and not s["lock"].locked()]
+    for _, sid in sorted(live)[:max(0, len(live) - MAX_LIVE_SESSIONS + 1)]:
+        agent, sessions[sid]["agent"] = sessions[sid]["agent"], None
+        await agent.__aexit__(None, None, None)
+
+
 @app.post("/api/run")
-async def run(r: RunIn):
+async def run(r: RunIn, request: Request):
     """Stream one agent turn as server-sent events: plan, thinking, text, every tool call with the
     Cypher it ran, graph updates and token usage (D-031). Each event is also kept so the session
     can be replayed."""
@@ -191,11 +229,21 @@ async def run(r: RunIn):
 
     sid = r.session_id or f"S-{uuid.uuid4().hex[:8]}"
     s = sessions.get(sid)
-    if s is None:
+    if s is None or s["agent"] is None:
+        await _evict_idle_sessions()
         agent = await Agent(session_id=sid).__aenter__()
-        s = sessions[sid] = {"agent": agent, "title": r.message[:60], "created": time.time(), "turns": 0,
-                             "events": [], "lock": asyncio.Lock(), "graph": {}}
-    mode = r.mode if r.mode != "auto" else ("agent" if agent_available() else "pipeline")
+        if s is None:
+            s = sessions[sid] = {"agent": agent, "title": r.message[:60], "created": time.time(), "turns": 0,
+                                 "events": [], "lock": asyncio.Lock(), "graph": {}}
+        s["agent"] = agent
+    s["last"] = time.time()
+    mode = r.mode if r.mode != "auto" else "agent"
+    notice = None
+    if mode == "agent":
+        if not agent_available():
+            mode = "pipeline"
+        elif notice := _agent_allowed(_client_ip(request)):
+            mode, notice = "pipeline", notice + ", so this run uses the fixed pipeline over the same tools."
 
     async def events():
         async with s["lock"]:
@@ -203,6 +251,10 @@ async def run(r: RunIn):
             user = {"type": "user", "text": r.message, "session_id": sid, "mode": mode, "at": time.time()}
             s["events"].append(user)
             yield _sse(user)
+            if notice:
+                ev = {"type": "notice", "message": notice, "at": time.time()}
+                s["events"].append(ev)
+                yield _sse(ev)
             async for ev in s["agent"].stream(r.message, mode=mode, disabled=set(r.disabled_tools)):
                 ev["at"] = time.time()
                 s["events"].append(ev)
