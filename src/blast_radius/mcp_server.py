@@ -1,0 +1,113 @@
+"""Blast Radius MCP server: the graph tools, served over MCP (D-011, D-016).
+
+The agent reaches every tool through this server, and so can any MCP client
+(e.g. Claude Desktop): `uv run python -m blast_radius.mcp_server`.
+"""
+import json
+
+from mcp.server.mcpserver import MCPServer
+
+from blast_radius import analysis, memory
+
+server = MCPServer(
+    name="blast-radius",
+    instructions=(
+        "Tools over a FalkorDB graph of Acme Cloud's services, their full npm dependency trees, "
+        "known advisories (OSV), customers, and past triage decisions. Every answer should cite "
+        "the dependency chains or installed versions the tools return."
+    ),
+)
+
+MAX_PATHS_PER_SERVICE = 3
+
+
+def _json(data) -> str:
+    return json.dumps(data, indent=1, default=str)
+
+
+@server.tool()
+def find_vulnerability(query: str) -> str:
+    """Resolve an advisory reference to graph ids. Accepts a GHSA id, a CVE id, or words from the
+    advisory summary (e.g. "lodash prototype pollution"). Returns up to 5 matches with severity."""
+    return _json(analysis.find_vulnerability(query))
+
+
+@server.tool()
+def find_exposure(vulnerability_id: str, include_dev: bool = False) -> str:
+    """Which services are exposed to an advisory, and through which dependency chain.
+    Production dependencies only unless include_dev is true. If nothing is exposed, returns a
+    safety proof: every installed version of the concerned packages next to the affected ranges."""
+    result = analysis.exposure(vulnerability_id, include_dev)
+    for svc in result["services"]:
+        total = len(svc["paths"])
+        svc["paths"] = svc["paths"][:MAX_PATHS_PER_SERVICE]
+        if total > MAX_PATHS_PER_SERVICE:
+            svc["more_paths"] = total - MAX_PATHS_PER_SERVICE
+    return _json(result)
+
+
+@server.tool()
+def customer_impact(vulnerability_id: str, include_dev: bool = False) -> str:
+    """Customers affected by an advisory: those using an exposed service directly or through
+    service-to-service calls (up to 3 hops), grouped by customer tier."""
+    return _json(analysis.customer_impact(vulnerability_id, include_dev))
+
+
+@server.tool()
+def upgrade_plan(vulnerability_id: str, include_dev: bool = False) -> str:
+    """The least-effort set of dependency changes, per service, that removes every exposure path
+    (a min cut computed with FalkorDB's max-flow). Also reports how many distinct exposure chains
+    the plan removes."""
+    return _json(analysis.upgrade_plan(vulnerability_id, include_dev))
+
+
+@server.tool()
+def chokepoints(limit: int = 10) -> str:
+    """Packages the whole estate depends on most (PageRank over the package graph), with how many
+    services install each and how many advisories affect it."""
+    return _json(analysis.chokepoints(limit))
+
+
+@server.tool()
+def record_decision(vulnerability_id: str, service: str, verdict: str, reason: str, person: str) -> str:
+    """Store a triage decision in the graph so it is reused later. verdict is one of
+    not_affected, risk_accepted, fix_planned, fixed. The decision remembers the exact exposure
+    paths it was made against, so it can be reopened if new paths appear."""
+    return _json(memory.record_decision(vulnerability_id, service, verdict, reason, person))
+
+
+@server.tool()
+def recall_precedent(vulnerability_id: str) -> str:
+    """Past decisions about this advisory, or about other advisories on the same package, with who
+    made them, why, and whether they are still current or have gone stale."""
+    return _json(memory.recall_precedent(vulnerability_id))
+
+
+@server.tool()
+def check_drift() -> str:
+    """Re-check every current decision against today's dependency graph. Decisions whose exposure
+    changed (a new path appeared) are marked stale and returned."""
+    return _json(memory.check_drift())
+
+
+@server.tool()
+def draft_issue(vulnerability_id: str, service: str) -> str:
+    """Draft a GitHub issue (title and markdown body) with the exposure paths and upgrade plan for
+    one service. This only drafts: opening the issue needs a human's approval in the app."""
+    exposure = analysis.exposure(vulnerability_id, include_dev=True)
+    plan = analysis.upgrade_plan(vulnerability_id, include_dev=True)
+    svc = next((s for s in exposure["services"] if s["service"] == service), None)
+    cut = next((p for p in plan["services"] if p["repo"] == service), None)
+    if not svc or not cut:
+        return _json({"error": f"{service} is not exposed to {vulnerability_id}"})
+    lines = [f"**{vulnerability_id}** reaches `{service}` (team {svc['team']}).", "", "### Exposure paths"]
+    lines += [f"- `{service}` → " + " → ".join(f"`{c}`" for c in p["chain"]) + (" _(dev only)_" if p["dev_only"] else "")
+              for p in svc["paths"][:5]]
+    lines += ["", f"### Plan ({cut['exposure_paths']} exposure chains removed)"]
+    lines += [f"- [ ] {a['action']}" for a in cut["actions"]]
+    lines += ["", "_Generated by Blast Radius from the dependency graph._"]
+    return _json({"title": f"[{service}] Remediate {vulnerability_id}", "body": "\n".join(lines)})
+
+
+if __name__ == "__main__":
+    server.run("stdio")

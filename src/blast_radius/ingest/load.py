@@ -11,6 +11,7 @@ from pathlib import Path
 from blast_radius import config
 from blast_radius.db import graph
 from blast_radius.ingest import lockfile, osv
+from blast_radius.memory import check_drift, export_memory, import_memory
 
 ROOT = Path(__file__).resolve().parents[3]
 DATA = ROOT / "data"
@@ -27,9 +28,13 @@ def _run(g, query: str, rows: list[dict]):
         g.query(query, {"rows": chunk})
 
 
-def build(osv_zip: Path = DATA / "raw/npm-osv.zip") -> dict:
+def build(osv_zip: Path = DATA / "raw/npm-osv.zip", deploys: dict[str, Path] | None = None) -> dict:
+    """Rebuild the graph. `deploys` swaps in a different lockfile for a service, to simulate a
+    deploy (e.g. data/scenarios/storefront-adds-koa-router.json.gz) and watch decisions drift."""
+    deploys = deploys or {}
     started = time.time()
     company = json.loads((DATA / "company.json").read_text())
+    memory = export_memory()  # decisions outlive rebuilds; they are re-attached and re-checked below
     g = graph()
     try:
         g.delete()
@@ -78,7 +83,8 @@ def build(osv_zip: Path = DATA / "raw/npm-osv.zip") -> dict:
     edges: dict[tuple[str, str], dict] = {}
     installs, root_reqs, install_reqs = [], [], []
     for svc in company["services"]:
-        lock = json.loads(gzip.decompress((DATA / "lockfiles" / f"{svc['name']}.json.gz").read_bytes()))
+        lock_path = deploys.get(svc["name"], DATA / "lockfiles" / f"{svc['name']}.json.gz")
+        lock = json.loads(gzip.decompress(Path(lock_path).read_bytes()))
         tree = lockfile.parse(lock)
         for p in tree.packages:
             pkgs[p.purl] = {"purl": p.purl, "name": p.name, "version": p.version}
@@ -145,6 +151,10 @@ def build(osv_zip: Path = DATA / "raw/npm-osv.zip") -> dict:
                MATCH (v:Vulnerability {id: a.id}), (pv:PackageVersion {purl: a.purl})
                CREATE (v)-[:AFFECTS {fixed: a.fixed}]->(pv)""", affects)
 
+    g.query("CREATE INDEX FOR (n:Decision) ON (n.id)")
+    restored = import_memory(memory)
+    stale = check_drift()
+
     stats = {
         "graph": config.GRAPH_NAME,
         "services": len(company["services"]),
@@ -155,10 +165,18 @@ def build(osv_zip: Path = DATA / "raw/npm-osv.zip") -> dict:
         "vulnerabilities": len(vulns),
         "vulnerabilities_affecting_installed": len({a["id"] for a in affects}),
         "affects_edges": len(affects),
+        "decisions_restored": restored,
+        "decisions_now_stale": [s["decision"] for s in stale],
         "seconds": round(time.time() - started, 1),
     }
     return stats
 
 
 if __name__ == "__main__":
-    print(json.dumps(build(), indent=1))
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("--deploy", action="append", default=[], metavar="SERVICE=LOCKFILE.json.gz",
+                    help="load a different lockfile for one service (simulated deploy)")
+    args = ap.parse_args()
+    print(json.dumps(build(deploys=dict(d.split("=", 1) for d in args.deploy)), indent=1))

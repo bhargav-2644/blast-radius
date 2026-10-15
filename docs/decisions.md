@@ -36,6 +36,9 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 | D-024 | 2026-10-15 | Upgrade cut: effort-weighted, run as unit-capacity max flow on a scratch graph | Accepted | Claude |
 | D-025 | 2026-10-15 | Store every advisory that concerns an installed package, to prove safety | Accepted | Claude |
 | D-026 | 2026-10-15 | Production dependencies by default, dev dependencies on request | Accepted | Claude |
+| D-027 | 2026-10-15 | Issues are only ever opened in our own repo, never in the upstream projects | Accepted | Claude |
+| D-028 | 2026-10-15 | Decisions store their exposure signatures and survive graph rebuilds; drift is checked on every rebuild | Accepted | Claude |
+| D-029 | 2026-10-15 | Episodic memory: each question, answer and cited nodes stored as `Session`/`Question` | Accepted | Claude |
 
 ## Entries
 
@@ -180,6 +183,21 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
 - **Decision:** Exposure, customer impact and upgrade plans count only packages that ship (`dev: false` in the lockfile) unless `include_dev` is set. When there's no production exposure, the safety answer still lists services exposed through dev tooling.
 - **Reason:** Most advisory hits in these repos are in build and test tooling. Counting them as customer-facing exposure would cry wolf and bury the real paths, while hiding them entirely would be dishonest.
+
+### D-027: Issues only go to our own repo
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
+- **Decision:** The `draft_issue` tool only drafts. When a person approves in the app, the issue is opened in `bhargav-2644/blast-radius` (labelled with the service name), never in the real upstream projects that back the demo services (Mattermost, Bitwarden, etc.).
+- **Reason:** The services are real open-source repos standing in for a fictional company. Opening issues on them would spam real maintainers with demo output. Keeping the action in our own repo still shows the agent acting end to end.
+
+### D-028: Decisions remember their exposure and survive rebuilds
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
+- **Decision:** A `Decision` stores one signature per affected install it was made against (install path + shortest chain). The loader exports decisions before rebuilding the graph, re-attaches them afterwards, and runs `check_drift`, which marks a decision `stale` (with the new chains as the reason) when its exposure gained a path. `--deploy SERVICE=lockfile` swaps one service's lockfile to simulate a deploy. `data/scenarios/storefront-adds-koa-router.json.gz` is a labelled synthetic change that adds `@koa/router → path-to-regexp@6.2.1`.
+- **Reason:** This is F6, the most distinctive feature. The graph is rebuilt from source data, so memory must live through rebuilds. Comparing signatures is exact and cheap. **Check (2026-10-15):** a `risk_accepted` decision on GHSA-9wv6 for storefront survived a rebuild unchanged, and after the simulated deploy it went stale with reason "1 new exposure path: @koa/router@10.1.1 → path-to-regexp@6.2.1".
+
+### D-029: Episodic memory of conversations
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
+- **Decision:** After each answer, the agent writes `(:Session)-[:ASKED]->(:Question {text, answer, tools, at})-[:CITED]->(:Vulnerability|:Service)`.
+- **Reason:** Track 2 asks for persistent conversation history. Linking questions to the nodes they cited makes history queryable through the graph ("what have we asked about storefront?") rather than kept as a flat log. Unlike decisions, sessions are not yet carried across graph rebuilds; that's a possible follow-up.
 
 <!-- Template for new entries:
 ### D-0NN: <short title>
