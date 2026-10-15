@@ -28,7 +28,8 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 | D-016 | 2026-10-15 | Agent framework: Anthropic SDK tool runner over our own MCP server, no LangChain/LangGraph | Proposed | Claude |
 | D-017 | 2026-10-15 | Model `claude-opus-5-5` with server-side refusal fallback | Superseded by D-019 | Claude |
 | D-018 | 2026-10-15 | Public GitHub repo `bhargav-2644/blast-radius`, created by Bobby | Accepted | Bobby |
-| D-019 | 2026-10-15 | Agent model is `claude-sonnet-5` | Accepted | Bobby |
+| D-019 | 2026-10-15 | Agent model is `claude-sonnet-5` | Superseded by D-020 | Bobby |
+| D-020 | 2026-10-15 | Agent model is `claude-sonnet-5-5` | Accepted | Bobby |
 
 ## Entries
 
@@ -129,10 +130,16 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Reason:** A public repo is a submission requirement (Rule 10). This cloud session isn't allowed to create repositories itself, so Bobby makes it with one click.
 
 ### D-019: Agent model is `claude-sonnet-5`
-- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Bobby
+- **Date:** 2026-10-15 · **Status:** Superseded by D-020 · **By:** Bobby
 - **Decision:** The agent uses `claude-sonnet-5`, with adaptive thinking. It replaces D-017. The model ID is kept in one config value (`CLAUDE_MODEL`) so it's a one-line change later.
 - **Reason:** Bobby's choice. Sonnet costs about half as much per token as Opus 5.5 ($2/$10 vs $4/$20 per million tokens), which matters for a demo that judges will run live, and it is strong at tool selection.
 - **Notes:** The server-side refusal fallback isn't offered for Sonnet 5, so the agent handles a `refusal` stop reason itself by telling the user, rather than failing silently. `claude-sonnet-5-5` is the newer Sonnet at the same price, if we ever want to switch.
+
+### D-020: Agent model is `claude-sonnet-5-5`
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Bobby
+- **Decision:** The agent uses `claude-sonnet-5-5`, the current Sonnet, with adaptive thinking and effort set explicitly. It replaces D-019. The model is still the single `CLAUDE_MODEL` setting.
+- **Reason:** Bobby's choice after hearing that Sonnet 5.5 is newer at the same price as Sonnet 5 ($2/$10 per million tokens).
+- **Notes:** Sonnet 5.5 supports the server-side refusal fallback (`fallbacks: "default"`), so we turn it on: CVE questions sit near the security safety category, and a fallback keeps the live demo from failing. Forced `tool_choice` isn't supported on this model, so tools are chosen with `auto` and steered by the prompt.
 
 <!-- Template for new entries:
 ### D-0NN: <short title>
