@@ -236,6 +236,12 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Decision:** The graph runs on a free FalkorDB Cloud instance. The app runs on Render from `render.yaml` (Docker, free plan, `/healthz` check) and builds the graph on first start (`blast_radius.seed`).
 - **Reason:** Hosting the graph on FalkorDB's own cloud shows the graph is central to the product, and both tiers are free. The container also runs anywhere with `docker compose --profile app up`.
 
+### D-036: Live deploy on Render (Oregon) against FalkorDB Cloud (Mumbai)
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Bobby
+- **Decision:** The app runs as Render web service `blast-radius` (free plan, Docker, branch `main`, auto-deploy on push) at https://blast-radius-0sou.onrender.com, created through the Render connector. It talks to a FalkorDB Cloud instance in AWS ap-south-1. Secrets (FalkorDB username/password, `ANTHROPIC_API_KEY`) were entered by Bobby in Render's dashboard and are not in the repo or chat. The first start built the graph in FalkorDB Cloud in 24 s (14 services, 7,643 package versions, 1,125 advisories).
+- **Reason:** Render is the first environment where agent mode can run, because cloud build sessions cannot see an Anthropic key. The connector cannot set `healthCheckPath`, so `/healthz` is set by hand in Render's settings. The repo is private, so Render's GitHub app needed access to it.
+- **Alternatives:** Render Singapore would sit closer to the Mumbai database than Oregon; we kept Oregon unless the demo feels slow, since a region change means recreating the service.
+
 <!-- Template for new entries:
 ### D-0NN: <short title>
 - **Date:** YYYY-MM-DD · **Status:** Proposed | Accepted | Superseded by D-0NN | Rejected · **By:** <name>
