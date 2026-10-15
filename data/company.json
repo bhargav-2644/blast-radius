@@ -1,0 +1,49 @@
+{
+  "_note": "Synthetic company layer for the demo (D-006). Services are real public repos at pinned versions; teams, people, customers and calls are invented.",
+  "company": "Acme Cloud",
+  "teams": [
+    {"name": "Platform", "people": ["Priya Nair", "Tom Becker"]},
+    {"name": "Collaboration", "people": ["Ana Souza", "Kenji Mori"]},
+    {"name": "Commerce", "people": ["Lena Fischer", "Omar Haddad"]},
+    {"name": "Insights", "people": ["Grace Liu"]},
+    {"name": "Security", "people": ["Ravi Menon"]},
+    {"name": "DevTools", "people": ["Sam Okafor"]},
+    {"name": "Mobile", "people": ["Mia Rossi"]},
+    {"name": "Growth", "people": ["Noah Kim"]}
+  ],
+  "services": [
+    {"name": "status-page",        "team": "Platform",      "tier": "critical", "repo": "louislam/uptime-kuma",            "ref": "1.18.0"},
+    {"name": "realtime-gateway",   "team": "Platform",      "tier": "critical", "repo": "socketio/socket.io",              "ref": "4.5.4"},
+    {"name": "data-access-layer",  "team": "Platform",      "tier": "critical", "repo": "typeorm/typeorm",                 "ref": "0.3.10"},
+    {"name": "team-chat-web",      "team": "Collaboration", "tier": "critical", "repo": "mattermost/mattermost-webapp",    "ref": "v7.5.0"},
+    {"name": "video-calls",        "team": "Collaboration", "tier": "standard", "repo": "jitsi/jitsi-meet",                "ref": "master"},
+    {"name": "document-viewer",    "team": "Collaboration", "tier": "standard", "repo": "mozilla/pdf.js",                  "ref": "v3.0.279"},
+    {"name": "storefront",         "team": "Commerce",      "tier": "critical", "repo": "bradtraversy/proshop-v2",         "ref": "main"},
+    {"name": "analytics-dashboard","team": "Insights",      "tier": "standard", "repo": "chartjs/Chart.js",                "ref": "v3.9.1"},
+    {"name": "password-vault-web", "team": "Security",      "tier": "critical", "repo": "bitwarden/clients",               "ref": "web-v2022.12.0"},
+    {"name": "api-client",         "team": "DevTools",      "tier": "internal", "repo": "Kong/insomnia",                   "ref": "core@2022.6.0"},
+    {"name": "build-tooling",      "team": "DevTools",      "tier": "internal", "repo": "webpack/webpack-dev-server",      "ref": "v4.11.1"},
+    {"name": "mobile-ui-kit",      "team": "Mobile",        "tier": "standard", "repo": "ionic-team/ionic-framework",      "ref": "v6.4.0", "path": "core/package-lock.json"},
+    {"name": "marketing-site",     "team": "Growth",        "tier": "standard", "repo": "heroku/node-js-getting-started",  "ref": "main"},
+    {"name": "plugin-marketplace", "team": "Growth",        "tier": "standard", "repo": "mozilla/addons-frontend",         "ref": "master"}
+  ],
+  "calls": [
+    ["storefront", "data-access-layer"], ["storefront", "realtime-gateway"], ["storefront", "analytics-dashboard"],
+    ["team-chat-web", "realtime-gateway"], ["team-chat-web", "data-access-layer"], ["team-chat-web", "document-viewer"],
+    ["video-calls", "realtime-gateway"], ["password-vault-web", "data-access-layer"],
+    ["status-page", "realtime-gateway"], ["plugin-marketplace", "data-access-layer"], ["marketing-site", "storefront"],
+    ["mobile-ui-kit", "storefront"], ["analytics-dashboard", "data-access-layer"]
+  ],
+  "customers": [
+    {"name": "Northwind Health",   "tier": "enterprise", "uses": ["team-chat-web", "video-calls", "password-vault-web"]},
+    {"name": "Globex Retail",      "tier": "enterprise", "uses": ["storefront", "analytics-dashboard"]},
+    {"name": "Initech Bank",       "tier": "enterprise", "uses": ["password-vault-web", "team-chat-web", "status-page"]},
+    {"name": "Umbrella Logistics", "tier": "enterprise", "uses": ["storefront", "mobile-ui-kit"]},
+    {"name": "Stark Studios",      "tier": "business",   "uses": ["video-calls", "document-viewer"]},
+    {"name": "Wayne Foods",        "tier": "business",   "uses": ["storefront"]},
+    {"name": "Hooli Labs",         "tier": "business",   "uses": ["team-chat-web", "plugin-marketplace"]},
+    {"name": "Pied Piper",         "tier": "startup",    "uses": ["status-page", "plugin-marketplace"]},
+    {"name": "Vandelay Imports",   "tier": "startup",    "uses": ["storefront", "marketing-site"]},
+    {"name": "Soylent Co",         "tier": "startup",    "uses": ["analytics-dashboard"]}
+  ]
+}

@@ -30,6 +30,9 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 | D-018 | 2026-10-15 | Public GitHub repo `bhargav-2644/blast-radius`, created by Bobby | Accepted | Bobby |
 | D-019 | 2026-10-15 | Agent model is `claude-sonnet-5` | Superseded by D-020 | Bobby |
 | D-020 | 2026-10-15 | Agent model is `claude-sonnet-5-5` | Accepted | Bobby |
+| D-021 | 2026-10-15 | 14 demo services from real repos at pinned tags; lockfiles committed | Accepted | Claude |
+| D-022 | 2026-10-15 | Two dependency layers: per-repo `Install` nodes + estate-wide `PackageVersion` nodes | Accepted | Claude |
+| D-023 | 2026-10-15 | Fixed versions stored on `AFFECTS` edges, not as nodes | Accepted | Claude |
 
 ## Entries
 
@@ -140,6 +143,23 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Decision:** The agent uses `claude-sonnet-5-5`, the current Sonnet, with adaptive thinking and effort set explicitly. It replaces D-019. The model is still the single `CLAUDE_MODEL` setting.
 - **Reason:** Bobby's choice after hearing that Sonnet 5.5 is newer at the same price as Sonnet 5 ($2/$10 per million tokens).
 - **Notes:** Sonnet 5.5 supports the server-side refusal fallback (`fallbacks: "default"`), so we turn it on: CVE questions sit near the security safety category, and a fallback keeps the live demo from failing. Forced `tool_choice` isn't supported on this model, so tools are chosen with `auto` and steered by the prompt.
+
+### D-021: Demo services are 14 real repos at pinned refs, lockfiles committed
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
+- **Decision:** The demo company "Acme Cloud" has 14 services, each a real public Node repo at a fixed tag (for example `uptime-kuma@1.18.0`, `mattermost-webapp@v7.5.0`, `bitwarden/clients@web-v2022.12.0`). Their `package-lock.json` files are committed gzipped in `data/lockfiles/` (3.5 MB). Teams, people, customers and calls are synthetic in `data/company.json`.
+- **Reason:** Pinned late-2022 versions contain many real, known vulnerabilities (532 advisories across 7,643 package versions), which makes the demo realistic. Committing the lockfiles makes the graph rebuild offline and identically, and the cloud sandbox can't use the GitHub API for repos outside the project anyway. Four services use a branch (`main`/`master`) because no suitable tag had a v2+ lockfile; their snapshot is frozen by the committed file.
+- **Alternatives:** parse-server, nest, video.js and etherpad were dropped because their lockfiles at that time were v1 format (supporting v1 adds parser work for little gain).
+
+### D-022: Two dependency layers in the graph
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
+- **Decision:** Model dependencies twice. **Install layer:** one `Install` node per `node_modules` path per repo, linked by `REQUIRES` edges (capacity 1) and to its `PackageVersion` by `IS`. **Package layer:** one `PackageVersion` per name@version across the whole estate, linked by merged `DEPENDS_ON` edges.
+- **Reason:** The same package version can resolve to different children in different repos. With a single merged layer, a traversal from repo X could follow repo Y's resolution and report a false exposure path, and enumerating all paths timed out. The Install layer is exact per repo, so `shortestPath` returns true paths in ~40 ms, and the repos' install graphs are disjoint, so `algo.maxFlow` works over all repos at once without filtering. The merged package layer is what estate-wide chokepoint analysis (PageRank, betweenness) needs.
+- **Check (2026-10-15):** On the top advisory (braces, 13 services), exposure ran in 10 ms, paths up to 8 hops in 40 ms, and `algo.maxFlow` for team-chat-web returned a cut of 3 in 60 ms. `algo.maxFlow` needs one edge per node pair and an explicit `capacityProperty`, so the loader dedupes edges and sets `capacity: 1`.
+
+### D-023: Fixed versions live on `AFFECTS` edges
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
+- **Decision:** Store the advisory's fixed versions as a `fixed` list on each `(:Vulnerability)-[:AFFECTS]->(:PackageVersion)` edge instead of `FIXED_IN` edges to `PackageVersion` nodes.
+- **Reason:** Fixed versions usually aren't installed anywhere in the estate, so `FIXED_IN` would need placeholder nodes that pollute chokepoint analysis. The upgrade planner only needs the version strings. This replaces the `FIXED_IN` edge in the plan's v1 model.
 
 <!-- Template for new entries:
 ### D-0NN: <short title>

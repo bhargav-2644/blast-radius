@@ -14,8 +14,12 @@ Built for **Graph Hacks 2026** (WeMakeDevs × FalkorDB). Tracks: **01 Agents Tha
 docker compose up -d          # FalkorDB on :6379, Browser on http://localhost:3000
 uv sync                       # install dependencies
 cp .env.example .env          # add your ANTHROPIC_API_KEY
-uv run pytest                 # smoke test: connects to FalkorDB
+uv run pytest                 # tests (needs FalkorDB running)
+./scripts/fetch_osv.sh        # download OSV npm advisories (~200 MB)
+uv run python -m blast_radius.ingest.load   # build the graph (~15 s)
 ```
+
+The demo company's 14 services are real public repos at pinned versions (lockfiles committed in `data/lockfiles/`); teams, customers and service calls are synthetic (`data/company.json`).
 
 ## Graph data model
 
