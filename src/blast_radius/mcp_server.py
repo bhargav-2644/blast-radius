@@ -3,7 +3,9 @@
 The agent reaches every tool through this server, and so can any MCP client
 (e.g. Claude Desktop): `uv run python -m blast_radius.mcp_server`.
 """
+import functools
 import json
+import time
 
 from mcp.server.mcpserver import MCPServer
 
@@ -25,7 +27,24 @@ def _json(data) -> str:
     return json.dumps(data, indent=1, default=str)
 
 
+def traced(fn):
+    """Attach the graph queries a tool ran (`_trace`) to its JSON result. The agent strips it before
+    the model sees the result and streams it to the UI instead."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        token = analysis.TRACE.set([])
+        started = time.perf_counter()
+        try:
+            out = json.loads(fn(*args, **kwargs))
+        finally:
+            log = analysis.TRACE.get()
+            analysis.TRACE.reset(token)
+        return _json({"result": out, "_trace": log, "_ms": round((time.perf_counter() - started) * 1000, 1)})
+    return wrapper
+
+
 @server.tool()
+@traced
 def find_vulnerability(query: str) -> str:
     """Resolve an advisory reference to graph ids. Accepts a GHSA id, a CVE id, or words from the
     advisory summary (e.g. "lodash prototype pollution"). Returns up to 5 matches with severity."""
@@ -33,6 +52,7 @@ def find_vulnerability(query: str) -> str:
 
 
 @server.tool()
+@traced
 def find_exposure(vulnerability_id: str, include_dev: bool = False) -> str:
     """Which services are exposed to an advisory, and through which dependency chain.
     Production dependencies only unless include_dev is true. If nothing is exposed, returns a
@@ -47,6 +67,7 @@ def find_exposure(vulnerability_id: str, include_dev: bool = False) -> str:
 
 
 @server.tool()
+@traced
 def customer_impact(vulnerability_id: str, include_dev: bool = False) -> str:
     """Customers affected by an advisory: those using an exposed service directly or through
     service-to-service calls (up to 3 hops), grouped by customer tier."""
@@ -54,6 +75,7 @@ def customer_impact(vulnerability_id: str, include_dev: bool = False) -> str:
 
 
 @server.tool()
+@traced
 def upgrade_plan(vulnerability_id: str, include_dev: bool = False) -> str:
     """The least-effort set of dependency changes, per service, that removes every exposure path
     (a min cut computed with FalkorDB's max-flow). Also reports how many distinct exposure chains
@@ -62,6 +84,7 @@ def upgrade_plan(vulnerability_id: str, include_dev: bool = False) -> str:
 
 
 @server.tool()
+@traced
 def chokepoints(limit: int = 10) -> str:
     """Packages the whole estate depends on most (PageRank over the package graph), with how many
     services install each and how many advisories affect it."""
@@ -69,6 +92,7 @@ def chokepoints(limit: int = 10) -> str:
 
 
 @server.tool()
+@traced
 def record_decision(vulnerability_id: str, service: str, verdict: str, reason: str, person: str) -> str:
     """Store a triage decision in the graph so it is reused later. verdict is one of
     not_affected, risk_accepted, fix_planned, fixed. The decision remembers the exact exposure
@@ -77,6 +101,7 @@ def record_decision(vulnerability_id: str, service: str, verdict: str, reason: s
 
 
 @server.tool()
+@traced
 def recall_precedent(vulnerability_id: str) -> str:
     """Past decisions about this advisory, or about other advisories on the same package, with who
     made them, why, and whether they are still current or have gone stale."""
@@ -84,6 +109,7 @@ def recall_precedent(vulnerability_id: str) -> str:
 
 
 @server.tool()
+@traced
 def check_drift() -> str:
     """Re-check every current decision against today's dependency graph. Decisions whose exposure
     changed (a new path appeared) are marked stale and returned."""
@@ -91,6 +117,7 @@ def check_drift() -> str:
 
 
 @server.tool()
+@traced
 def draft_issue(vulnerability_id: str, service: str) -> str:
     """Draft a GitHub issue (title and markdown body) with the exposure paths and upgrade plan for
     one service. This only drafts: opening the issue needs a human's approval in the app."""

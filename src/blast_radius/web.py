@@ -2,29 +2,34 @@
 
 Run: uv run uvicorn blast_radius.web:app --reload
 """
+import asyncio
+import json
 import os
+import time
+import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from blast_radius import analysis, memory
+from blast_radius import analysis, config, memory
+from blast_radius.agent import agent_available
 from blast_radius.mcp_server import draft_issue
 
 STATIC = Path(__file__).parent / "static"
 ISSUE_REPO = os.getenv("ISSUE_REPO", "bhargav-2644/blast-radius")  # never upstream projects (D-027)
-agents: dict = {}
+sessions: dict = {}  # session id -> agent, transcript of events, graph state
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    for agent in agents.values():
-        await agent.__aexit__(None, None, None)
+    for s in sessions.values():
+        await s["agent"].__aexit__(None, None, None)
 
 
 app = FastAPI(title="Blast Radius", lifespan=lifespan)
@@ -41,7 +46,7 @@ def overview(include_dev: bool = False):
     return {
         "stats": analysis._rows("graph_stats"),
         "top": analysis._rows("top_advisories", include_dev=include_dev, limit=12),
-        "agent_available": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "agent_available": agent_available(),
         "issues_enabled": bool(os.getenv("GITHUB_TOKEN")),
         "issue_repo": ISSUE_REPO,
     }
@@ -128,8 +133,8 @@ class IssueIn(BaseModel):
 @app.post("/api/issues")
 def open_issue(i: IssueIn):
     """Opens the drafted issue in our own repo. Called only from the approve button (D-012, D-027)."""
-    import json
     draft = json.loads(draft_issue(i.vulnerability_id, i.service))
+    draft = draft.get("result", draft)
     if "error" in draft:
         raise HTTPException(400, draft["error"])
     token = os.getenv("GITHUB_TOKEN")
@@ -144,20 +149,81 @@ def open_issue(i: IssueIn):
     return {"opened": True, "url": r.json()["html_url"], "draft": draft}
 
 
-class ChatIn(BaseModel):
-    session_id: str
+class RunIn(BaseModel):
+    session_id: str | None = None
     message: str
+    mode: str = "auto"            # auto | agent | pipeline
+    disabled_tools: list[str] = []
 
 
-@app.post("/api/chat")
-async def chat(c: ChatIn):
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        raise HTTPException(503, "The agent needs ANTHROPIC_API_KEY. The graph views work without it.")
+def _sse(event: dict) -> str:
+    return f"data: {json.dumps(event, default=str)}\n\n"
+
+
+@app.get("/api/capabilities")
+async def capabilities():
+    """The MCP tools the agent can choose from, for the tools drawer."""
+    from blast_radius.mcp_server import server
+    tools = await server.list_tools()
+    return {"tools": [{"name": t.name, "description": " ".join((t.description or "").split()).split(". ")[0]} for t in tools],
+            "agent_available": agent_available(), "model": config.CLAUDE_MODEL}
+
+
+@app.get("/api/sessions")
+def list_sessions():
+    return [{"id": sid, "title": s["title"], "created": s["created"], "turns": s["turns"]}
+            for sid, s in sorted(sessions.items(), key=lambda kv: kv[1]["created"], reverse=True)]
+
+
+@app.get("/api/sessions/{sid}")
+def get_session(sid: str):
+    if sid not in sessions:
+        raise HTTPException(404, "unknown session")
+    return {"id": sid, "title": sessions[sid]["title"], "events": sessions[sid]["events"]}
+
+
+@app.post("/api/run")
+async def run(r: RunIn):
+    """Stream one agent turn as server-sent events: plan, thinking, text, every tool call with the
+    Cypher it ran, graph updates and token usage (D-031). Each event is also kept so the session
+    can be replayed."""
     from blast_radius.agent import Agent
 
-    agent = agents.get(c.session_id)
-    if agent is None:
-        agent = await Agent(session_id=c.session_id).__aenter__()
-        agents[c.session_id] = agent
-    turn = await agent.ask(c.message)
-    return {"answer": turn.answer, "tool_calls": turn.tool_calls, "refused": turn.refused, "model": turn.model}
+    sid = r.session_id or f"S-{uuid.uuid4().hex[:8]}"
+    s = sessions.get(sid)
+    if s is None:
+        agent = await Agent(session_id=sid).__aenter__()
+        s = sessions[sid] = {"agent": agent, "title": r.message[:60], "created": time.time(), "turns": 0,
+                             "events": [], "lock": asyncio.Lock(), "graph": {}}
+    mode = r.mode if r.mode != "auto" else ("agent" if agent_available() else "pipeline")
+
+    async def events():
+        async with s["lock"]:
+            s["turns"] += 1
+            user = {"type": "user", "text": r.message, "session_id": sid, "mode": mode, "at": time.time()}
+            s["events"].append(user)
+            yield _sse(user)
+            async for ev in s["agent"].stream(r.message, mode=mode, disabled=set(r.disabled_tools)):
+                ev["at"] = time.time()
+                s["events"].append(ev)
+                yield _sse(ev)
+                graph = _graph_update(s["graph"], ev)
+                if graph:
+                    s["events"].append(graph)
+                    yield _sse(graph)
+
+    return StreamingResponse(events(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Session": sid})
+
+
+def _graph_update(state: dict, ev: dict) -> dict | None:
+    """Grow the session's path graph as exposure and customer results arrive."""
+    if ev.get("type") != "tool_end" or ev.get("is_error") or not isinstance(ev.get("result"), dict):
+        return None
+    if ev["tool"] not in ("find_exposure", "customer_impact"):
+        return None
+    vid = ev["input"].get("vulnerability_id")
+    view = state.setdefault(vid, {"exposure": {"services": []}, "customers": {"customers": []}})
+    view["exposure" if ev["tool"] == "find_exposure" else "customers"] = ev["result"]
+    return {"type": "graph", "vulnerability_id": vid, "at": time.time(),
+            **_graph_view(vid, view["exposure"], view["customers"])}

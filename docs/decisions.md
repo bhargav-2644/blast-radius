@@ -40,6 +40,8 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 | D-028 | 2026-10-15 | Decisions store their exposure signatures and survive graph rebuilds; drift is checked on every rebuild | Accepted | Claude |
 | D-029 | 2026-10-15 | Episodic memory: each question, answer and cited nodes stored as `Session`/`Question` | Accepted | Claude |
 | D-030 | 2026-10-15 | Web UI: one static page served by FastAPI, JS libraries vendored | Accepted | Claude |
+| D-031 | 2026-10-15 | Every agent step streams to the UI as an event, including each Cypher query with params, timing and row count | Accepted | Bobby (ask), Claude |
+| D-032 | 2026-10-15 | Biomni-inspired three-pane UI: sessions and tool toggles, live executor, plan plus growing graph | Accepted | Bobby (ask), Claude |
 
 ## Entries
 
@@ -204,6 +206,17 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
 - **Decision:** FastAPI serves JSON endpoints and a single `index.html` (vanilla JS, Cytoscape.js 3.28.1 for the path graph, marked 12.0.2 for agent answers). The two libraries are committed in `static/vendor/` instead of loaded from a CDN. The graph, plan, decision and drift views call the graph directly, so they work without a Claude API key; only the chat needs one.
 - **Reason:** No frontend build chain to maintain in a solo 3-day build. Vendoring avoids depending on a CDN during the live demo, and the CDN was blocked from our build environment anyway. Keeping the graph views usable without the LLM means the demo still shows the graph's work if the API has a problem.
+
+### D-031: Stream every step, down to the Cypher
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Bobby (ask), Claude
+- **Decision:** `Agent.stream()` yields one event per step: `start`, `plan`, `thinking`, `text`, `tool_pending`, `tool_start`, `tool_end`, `usage`, `done`, `error`. Each MCP tool wraps its work in a trace, so `tool_end` carries every graph query it ran (Cypher text, parameters, milliseconds, rows; the max-flow call is marked as an algorithm). The trace travels inside the MCP result and is stripped before the model sees it. `POST /api/run` sends the events as server-sent events, keeps each session's transcript for replay, and adds `graph` events that grow the path view as exposure and customer results arrive. Without an API key, a fixed pipeline runs the same MCP tools and emits the same events.
+- **Reason:** Bobby asked for a UI that shows whatever is happening in the backend, because the users are developers. Showing the exact queries is also the strongest evidence for judges that the answers come from graph traversals, not the model. Keeping the trace in the tool result means any MCP client gets it, and the model's context stays small.
+- **Alternatives:** WebSockets (two-way traffic isn't needed; SSE over a POST is simpler). Logging queries server-side only (a developer couldn't see them while the agent works).
+
+### D-032: Biomni-inspired three-pane layout
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Bobby (ask), Claude
+- **Decision:** The page is rebuilt around the live run, following Stanford's Biomni agent UI, which Bobby pointed to. The left pane holds sessions, the MCP tools with on/off toggles (a disabled tool is withheld from the model), and the Agent/Pipeline mode. The centre is the executor: each tool call is a collapsible card with Input, Cypher and Output tabs; thinking streams in its own card; the answer streams as markdown; meters show tool calls, graph queries, time in FalkorDB and tokens. The right pane shows the live plan checklist above tabs for the growing graph, findings (exposure, customers, least-effort fix with the approve-to-open-issue button), decisions with drift re-check, and the raw event log.
+- **Reason:** Biomni shows its reasoning, code and results as the agent works, which is what Bobby wants for a developer audience. Its site is blocked from our build environment, so the layout follows Biomni's public documentation rather than its live page. It stays one static page (D-030).
 
 <!-- Template for new entries:
 ### D-0NN: <short title>

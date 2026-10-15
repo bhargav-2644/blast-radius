@@ -22,7 +22,8 @@ uv run python -m blast_radius.ingest.load   # build the graph (~15 s)
 Then:
 
 ```bash
-uv run uvicorn blast_radius.web:app      # web app on http://localhost:8000 (graph views work without an API key)
+uv run uvicorn blast_radius.web:app      # web app on http://localhost:8000; streams every agent step and Cypher query live
+                                         # (without an API key it runs a fixed pipeline over the same tools)
 uv run python -m blast_radius.agent "Are we affected by CVE-2025-7783?"   # agent in the terminal
 uv run python -m blast_radius.mcp_server # the graph tools as an MCP server (stdio), e.g. for Claude Desktop
 ```

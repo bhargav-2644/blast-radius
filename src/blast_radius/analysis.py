@@ -1,7 +1,9 @@
 """Graph questions the agent can ask. Each function runs Cypher from queries/ and returns
 plain dicts that include the nodes and paths used, so every answer can show its evidence."""
 import re
+import time
 import uuid
+from contextvars import ContextVar
 from collections import defaultdict, deque
 from functools import cache
 from pathlib import Path
@@ -20,13 +22,29 @@ EFFORT_OVERRIDE = 4     # parent's range excludes every fix: needs an npm overri
 EFFORT_TRANSITIVE = 6   # change a link deep in the tree: needs an upstream package release
 
 
+# Every graph query a tool runs is recorded here, so the UI can stream exactly what ran (query, params,
+# time, row count). The MCP server resets it per tool call and returns it alongside the result.
+TRACE: ContextVar[list | None] = ContextVar("TRACE", default=None)
+
+
+def trace(kind: str, name: str, text: str, params: dict, ms: float, rows: int) -> None:
+    log = TRACE.get()
+    if log is not None:
+        shown = {k: (v if len(str(v)) < 200 else f"<{len(v)} items>" if isinstance(v, list) else str(v)[:200])
+                 for k, v in params.items()}
+        log.append({"kind": kind, "name": name, "query": text.strip(), "params": shown,
+                    "ms": round(ms, 1), "rows": rows})
+
+
 @cache
 def cypher(name: str) -> str:
     return (QUERIES / f"{name}.cypher").read_text()
 
 
 def _rows(name: str, **params) -> list[dict]:
+    started = time.perf_counter()
     result = graph().ro_query(cypher(name), params)
+    trace("cypher", name, cypher(name), params, (time.perf_counter() - started) * 1000, len(result.result_set))
     cols = [c[1] if isinstance(c, (list, tuple)) else c for c in result.header]
     return [dict(zip(cols, row)) for row in result.result_set]
 
@@ -188,7 +206,10 @@ def _min_cut(sub: list[dict], targets: list[str]) -> tuple[set, float, str]:
         scratch.query("""UNWIND $rows AS e MATCH (a:Node {key: e[0]}), (b:Node {key: e[1]})
                          CREATE (a)-[:REQ {capacity: 1}]->(b)""", {"rows": [[u, v] for u, v, _ in unit]})
         try:
+            started = time.perf_counter()
             res = scratch.query(cypher("max_flow_cut"), {"targets": targets}, timeout=10_000).result_set
+            trace("algorithm", f"max_flow_cut on scratch graph {scratch.name} ({len(nodes)} nodes, {len(unit)} edges)",
+                  cypher("max_flow_cut"), {"targets": targets}, (time.perf_counter() - started) * 1000, len(res))
             max_flow, flow_edges, flows = res[0]
             flow = {tuple(fe): f for fe, f in zip(flow_edges, flows)}
             solver = "falkordb algo.maxFlow"

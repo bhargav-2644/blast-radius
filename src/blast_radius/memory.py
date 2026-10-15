@@ -4,10 +4,11 @@ A decision stores the exact exposure it was made against. When the dependency gr
 that a new exposure appears, the decision is marked stale and the agent raises it again.
 """
 import json
+import time
 import uuid
 from datetime import datetime, timezone
 
-from blast_radius.analysis import _rows, cypher
+from blast_radius.analysis import _rows, cypher, trace
 from blast_radius.db import graph
 
 VERDICTS = ("not_affected", "risk_accepted", "fix_planned", "fixed")
@@ -24,9 +25,12 @@ def record_decision(vuln_id: str, service: str, verdict: str, reason: str, perso
     sigs = _signatures(vuln_id, service)
     decision_id = f"DEC-{uuid.uuid4().hex[:8]}"
     at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    res = graph().query(cypher("record_decision"), {"id": vuln_id, "service": service, "person": person,
-                                                     "decision_id": decision_id, "verdict": verdict,
-                                                     "reason": reason, "at": at, "signatures": sigs})
+    params = {"id": vuln_id, "service": service, "person": person, "decision_id": decision_id,
+              "verdict": verdict, "reason": reason, "at": at, "signatures": sigs}
+    started = time.perf_counter()
+    res = graph().query(cypher("record_decision"), params)
+    trace("cypher", "record_decision", cypher("record_decision"), params, (time.perf_counter() - started) * 1000,
+          len(res.result_set))
     if not res.result_set:
         raise ValueError(f"unknown advisory {vuln_id!r} or service {service!r}")
     return {"decision": decision_id, "verdict": verdict, "service": service, "vulnerability": vuln_id,
