@@ -43,6 +43,15 @@ class Advisory:
             return True
         return False
 
+    def describe_ranges(self, package: str) -> list[str]:
+        out = []
+        for introduced, fixed, last in self.ranges.get(package, ()):
+            lo = f">={introduced}" if introduced not in (None, "0") else ""
+            hi = f"<{fixed}" if fixed else (f"<={last}" if last else "")
+            out.append(" ".join(x for x in (lo, hi) if x) or "all versions")
+        out += sorted(self.versions.get(package, ()))
+        return out
+
     def fixed_versions(self, package: str) -> list[str]:
         return [f for _, f, _ in self.ranges.get(package, ()) if f]
 

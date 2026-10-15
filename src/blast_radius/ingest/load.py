@@ -121,17 +121,26 @@ def build(osv_zip: Path = DATA / "raw/npm-osv.zip") -> dict:
     # --- advisories matched at ingest (D-005)
     names = {p["name"] for p in pkgs.values()}
     index = osv.load_index(osv_zip, names)
+    # Every advisory that concerns a package we install becomes a node with CONCERNS -> Package,
+    # even when no installed version is affected: that is what lets "no path" be proven (F4).
     vulns: dict[str, dict] = {}
+    concerns: dict[tuple[str, str], dict] = {}
     affects = []
+    for name in sorted(names):
+        for adv in index.get(name, []):
+            vulns[adv.id] = {"id": adv.id, "aliases": adv.aliases, "summary": adv.summary,
+                             "severity": adv.severity or "UNKNOWN", "published": adv.published}
+            concerns[(adv.id, name)] = {"id": adv.id, "name": name, "ranges": adv.describe_ranges(name)}
     for p in pkgs.values():
         for adv in index.get(p["name"], []):
             if adv.affects(p["name"], p["version"]):
-                vulns[adv.id] = {"id": adv.id, "aliases": adv.aliases, "summary": adv.summary,
-                                 "severity": adv.severity or "UNKNOWN", "published": adv.published}
                 affects.append({"id": adv.id, "purl": p["purl"], "fixed": adv.fixed_versions(p["name"])})
     _run(g, """UNWIND $rows AS v
                CREATE (:Vulnerability {id: v.id, aliases: v.aliases, summary: v.summary,
                                        severity: v.severity, published: v.published})""", list(vulns.values()))
+    _run(g, """UNWIND $rows AS c
+               MATCH (v:Vulnerability {id: c.id}), (pkg:Package {name: c.name})
+               CREATE (v)-[:CONCERNS {ranges: c.ranges}]->(pkg)""", list(concerns.values()))
     _run(g, """UNWIND $rows AS a
                MATCH (v:Vulnerability {id: a.id}), (pv:PackageVersion {purl: a.purl})
                CREATE (v)-[:AFFECTS {fixed: a.fixed}]->(pv)""", affects)
@@ -144,6 +153,7 @@ def build(osv_zip: Path = DATA / "raw/npm-osv.zip") -> dict:
         "requires_edges": len(root_reqs) + len(install_reqs),
         "package_dependency_edges": len(edges),
         "vulnerabilities": len(vulns),
+        "vulnerabilities_affecting_installed": len({a["id"] for a in affects}),
         "affects_edges": len(affects),
         "seconds": round(time.time() - started, 1),
     }

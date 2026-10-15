@@ -80,6 +80,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "httpx" },
     { name = "mcp" },
+    { name = "node-semver" },
     { name = "python-dotenv" },
     { name = "semver" },
     { name = "uvicorn" },
@@ -97,6 +98,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "mcp", specifier = ">=2.3" },
+    { name = "node-semver", specifier = ">=0.9.1" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "semver", specifier = ">=3.0" },
     { name = "uvicorn", specifier = ">=0.30" },
@@ -571,6 +573,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/9e/2d/7c251e34207f6c51000312fc8839111ac45cfe02023f90b44e7f1051dd8e/mcp_types-2.3.0.tar.gz", hash = "sha256:d1e46549edb35ee19a94940fcee6d1addd7e589ab7ea92dda83f5d84781fc362", size = 65898, upload-time = "2026-10-02T22:06:57.863Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/ce/48/32583066b155bb5d4507e7887dc88ee23118cc4de8e2a12870c49719e2a8/mcp_types-2.3.0-py3-none-any.whl", hash = "sha256:968efdbdaedfab06adae40d378a34395f1090c5921d4be3c9cde283aaf76d91d", size = 69108, upload-time = "2026-10-02T22:06:54.099Z" },
+]
+
+[[package]]
+name = "node-semver"
+version = "0.9.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/80/46/83d4ff2e6ee95a2395c9695f92b83c7aec16a8341cf4b50be08d67f59deb/node_semver-0.9.1.tar.gz", hash = "sha256:f052dbdcbc42dd5a0c04b22829a3af98c1f29e4675cc6d88db24250a3f7f8ec7", size = 12828, upload-time = "2026-06-23T03:06:50.862Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/82/aee31be77e4539deb4b1305f2b42ed5f92a2ff7b8057ada67a0c3ba12187/node_semver-0.9.1-py3-none-any.whl", hash = "sha256:47669dc0f7e104cc482f69fda53c04fbe34ce9b7c9d6990e43c99a028d1628bd", size = 12051, upload-time = "2026-06-23T03:06:49.633Z" },
 ]
 
 [[package]]

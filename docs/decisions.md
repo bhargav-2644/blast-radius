@@ -33,6 +33,9 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 | D-021 | 2026-10-15 | 14 demo services from real repos at pinned tags; lockfiles committed | Accepted | Claude |
 | D-022 | 2026-10-15 | Two dependency layers: per-repo `Install` nodes + estate-wide `PackageVersion` nodes | Accepted | Claude |
 | D-023 | 2026-10-15 | Fixed versions stored on `AFFECTS` edges, not as nodes | Accepted | Claude |
+| D-024 | 2026-10-15 | Upgrade cut: effort-weighted, run as unit-capacity max flow on a scratch graph | Accepted | Claude |
+| D-025 | 2026-10-15 | Store every advisory that concerns an installed package, to prove safety | Accepted | Claude |
+| D-026 | 2026-10-15 | Production dependencies by default, dev dependencies on request | Accepted | Claude |
 
 ## Entries
 
@@ -160,6 +163,23 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
 - **Decision:** Store the advisory's fixed versions as a `fixed` list on each `(:Vulnerability)-[:AFFECTS]->(:PackageVersion)` edge instead of `FIXED_IN` edges to `PackageVersion` nodes.
 - **Reason:** Fixed versions usually aren't installed anywhere in the estate, so `FIXED_IN` would need placeholder nodes that pollute chokepoint analysis. The upgrade planner only needs the version strings. This replaces the `FIXED_IN` edge in the plan's v1 model.
+
+### D-024: Effort-weighted upgrade cut on a scratch graph, with unit capacities
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude (refines D-013)
+- **Decision:** Each dependency link in a service's exposure subgraph gets an effort weight: 1 = refresh the lockfile (a fixed version already fits the parent's range), 2 = bump a direct dependency, 4 = npm override (the parent's range excludes every fix), 6 = needs an upstream release. The minimum-effort cut is computed by copying the subgraph into a temporary FalkorDB graph and running `algo.maxFlow`. Each weight-k link becomes k parallel unit-capacity paths, and the cut is read from the residual graph in Python. If `algo.maxFlow` exceeds 10 s, a Python Edmonds-Karp fallback runs and the result says so.
+- **Reason:** Plain unit weights give "fewest links" rather than "least work", and that picks fixes developers can't actually make. On real subgraphs, `algo.maxFlow` hung on some graphs with mixed capacities (a 14-node, 24-edge graph timed out), while the same graph with unit capacities solved in 60 ms. The expansion keeps FalkorDB doing the flow computation: 698 of 700 cuts in a full sweep used `algo.maxFlow`, and 2 used the fallback. A temporary graph per request is cheap (FalkorDB hosts many graphs) and leaves the main graph untouched.
+- **Check:** A test removes each plan's cut links and confirms that no affected install stays reachable. Example: picomatch ReDoS GHSA-c2c7-rcm5-vvqj reaches 3 services in production through 5,854 distinct dependency chains, which 13 changes remove.
+- **Follow-up:** Worth reporting the mixed-capacity hang to FalkorDB with a minimal repro.
+
+### D-025: Keep every advisory that concerns an installed package
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
+- **Decision:** Load all 1,125 advisories for packages present in the estate as `Vulnerability` nodes with `CONCERNS {ranges}` edges to `Package`, not only the 532 that affect an installed version. `AFFECTS` edges exist only for real matches.
+- **Reason:** "No path found" (F4) must be provable: the safety answer shows which versions of the package are installed and where, next to the affected ranges. An advisory that isn't in the graph would give no evidence.
+
+### D-026: Production dependencies by default
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
+- **Decision:** Exposure, customer impact and upgrade plans count only packages that ship (`dev: false` in the lockfile) unless `include_dev` is set. When there's no production exposure, the safety answer still lists services exposed through dev tooling.
+- **Reason:** Most advisory hits in these repos are in build and test tooling. Counting them as customer-facing exposure would cry wolf and bury the real paths, while hiding them entirely would be dishonest.
 
 <!-- Template for new entries:
 ### D-0NN: <short title>
