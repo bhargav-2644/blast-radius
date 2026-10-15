@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blast Radius</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<script src="/static/vendor/cytoscape.min.js"></script>
+<script src="/static/vendor/marked.min.js"></script>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --ink: #14171c; --muted: #5d6573; --line: #e3e6eb;
+  --accent: #3b5bdb; --danger: #d6336c; --warn: #e8590c; --ok: #2b8a3e; --pkg: #868e96;
+  --chip: #eef1f6; --mono: "JetBrains Mono", ui-monospace, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #0f1115; --panel: #171a21; --ink: #e8eaee; --muted: #9aa3b2; --line: #2a2f3a;
+          --accent: #748ffc; --danger: #f06595; --warn: #ff922b; --ok: #51cf66; --pkg: #adb5bd; --chip: #222733; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; font: 14px/1.5 Inter, system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; border-bottom: 1px solid var(--line); background: var(--panel); }
+header h1 { font-size: 16px; margin: 0; letter-spacing: .2px; }
+header .tag { color: var(--muted); font-size: 13px; }
+header form { margin-left: auto; display: flex; gap: 8px; flex: 0 1 420px; }
+input, select, textarea, button { font: inherit; color: inherit; }
+input, select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; width: 100%; }
+button { background: var(--accent); color: #fff; border: 0; border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 500; white-space: nowrap; }
+button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+button:disabled { opacity: .5; cursor: default; }
+main { display: grid; grid-template-columns: 340px 1fr 420px; gap: 12px; padding: 12px; height: calc(100vh - 57px); }
+section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; min-height: 0; }
+section > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .6px; color: var(--muted); margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+.scroll { overflow: auto; padding: 12px 14px; flex: 1; }
+#cy { flex: 1; min-height: 300px; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 8px 14px; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 4px; vertical-align: -1px; }
+.msg { margin-bottom: 12px; }
+.msg.user { color: var(--muted); }
+.msg .who { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+.msg .body p { margin: 4px 0; }
+.tools { font-family: var(--mono); font-size: 11px; color: var(--muted); margin: 4px 0; }
+.tools span { display: inline-block; background: var(--chip); border-radius: 6px; padding: 1px 6px; margin: 2px 4px 2px 0; }
+#chatform { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+.card { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; }
+.row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sev { font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--chip); }
+.sev.CRITICAL, .sev.HIGH { color: var(--danger); } .sev.MODERATE { color: var(--warn); }
+.chain { font-family: var(--mono); font-size: 12px; color: var(--muted); word-break: break-word; margin-top: 4px; }
+.chain b { color: var(--danger); font-weight: 500; }
+.muted { color: var(--muted); }
+.big { font-size: 22px; font-weight: 600; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
+.stats div { background: var(--chip); border-radius: 10px; padding: 8px 10px; }
+.tabs { display: flex; border-bottom: 1px solid var(--line); }
+.tabs button { background: transparent; color: var(--muted); border-radius: 0; border-bottom: 2px solid transparent; padding: 10px 12px; }
+.tabs button.on { color: var(--ink); border-bottom-color: var(--accent); }
+.badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; background: var(--chip); }
+.badge.stale { color: var(--warn); font-weight: 600; } .badge.current { color: var(--ok); }
+.list-item { cursor: pointer; } .list-item:hover { border-color: var(--accent); }
+.form { display: grid; gap: 8px; }
+.note { font-size: 12px; color: var(--muted); }
+@media (max-width: 1100px) { main { grid-template-columns: 1fr; height: auto; } #cy { height: 420px; } section { max-height: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>💥 Blast Radius</h1><span class="tag">What a CVE means for Acme Cloud, on FalkorDB</span>
+  <form id="search"><input id="q" placeholder="GHSA / CVE id or words, e.g. lodash prototype pollution"><button>Trace</button></form>
+</header>
+<main>
+  <section>
+    <h2>Ask the agent</h2>
+    <div class="scroll" id="chat"></div>
+    <form id="chatform"><input id="cq" placeholder="Are we affected by CVE-2024-45296?"><button>Ask</button></form>
+  </section>
+  <section>
+    <h2 id="graphtitle">Exposure graph</h2>
+    <div id="cy"></div>
+    <div class="legend"><span><i style="background:var(--danger)"></i>advisory / vulnerable package</span><span><i style="background:var(--pkg)"></i>dependency</span><span><i style="background:var(--accent)"></i>service</span><span><i style="background:var(--ok)"></i>customer</span>
+      <label style="margin-left:auto"><input type="checkbox" id="dev" style="width:auto"> include dev dependencies</label></div>
+  </section>
+  <section>
+    <div class="tabs" id="tabs">
+      <button data-t="overview" class="on">Overview</button><button data-t="exposure">Exposure</button><button data-t="plan">Plan</button><button data-t="decisions">Decisions</button>
+    </div>
+    <div class="scroll" id="panel"></div>
+  </section>
+</main>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+let state = { tab: "overview", data: null, overview: null };
+const session = "web-" + Math.random().toString(36).slice(2, 10);
+
+async function api(path, opts) {
+  const r = await fetch(path, opts && opts.body ? { method: "POST", headers: {"Content-Type": "application/json"}, ...opts } : opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+
+const cy = cytoscape({ container: $("#cy"), wheelSensitivity: 0.2, style: [
+  { selector: "node", style: { "label": "data(label)", "font-size": 10, "color": css("--ink"), "text-valign": "bottom", "text-margin-y": 4,
+      "background-color": css("--pkg"), "width": 14, "height": 14, "font-family": "JetBrains Mono" } },
+  { selector: "node[kind='vulnerability']", style: { "background-color": css("--danger"), "shape": "diamond", "width": 26, "height": 26, "font-weight": 600 } },
+  { selector: "node[kind='vulnerable']", style: { "background-color": css("--danger"), "width": 18, "height": 18 } },
+  { selector: "node[kind='service']", style: { "background-color": css("--accent"), "shape": "round-rectangle", "width": 22, "height": 22, "font-family": "Inter", "font-weight": 600 } },
+  { selector: "node[kind='customer']", style: { "background-color": css("--ok"), "shape": "ellipse", "width": 20, "height": 20, "font-family": "Inter" } },
+  { selector: "edge", style: { "width": 1.4, "line-color": css("--line"), "target-arrow-color": css("--line"), "target-arrow-shape": "triangle", "curve-style": "bezier", "arrow-scale": .8 } },
+  { selector: "edge[label='affected by']", style: { "line-color": css("--danger"), "target-arrow-color": css("--danger") } },
+]});
+
+function drawGraph(g) {
+  cy.elements().remove();
+  cy.add(g.nodes.map(n => ({ data: n })));
+  cy.add(g.edges.map((e, i) => ({ data: { id: "e" + i, ...e } })));
+  const roots = cy.nodes("[kind='customer']").length ? cy.nodes("[kind='customer']") : cy.nodes("[kind='service']");
+  cy.layout({ name: "breadthfirst", directed: true, roots, spacingFactor: 1.1, padding: 20 }).run();
+}
+
+async function loadOverview() {
+  state.overview = await api(`/api/overview?include_dev=${$("#dev").checked}`);
+  if (!state.data) render();
+  if (!state.overview.agent_available) addMsg("agent", "The agent is offline because `ANTHROPIC_API_KEY` isn't set. The graph views on the right still work: search an advisory above or pick one from Overview.");
+}
+
+async function trace(id) {
+  $("#graphtitle").textContent = "Tracing " + id + "…";
+  state.data = await api(`/api/advisory/${encodeURIComponent(id)}?include_dev=${$("#dev").checked}`);
+  $("#graphtitle").textContent = `Exposure graph · ${id}`;
+  drawGraph(state.data.graph);
+  setTab(state.data.exposure.exposed ? "exposure" : "exposure");
+}
+
+function setTab(t) { state.tab = t; document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.t === t)); render(); }
+
+function render() {
+  const p = $("#panel"), d = state.data, o = state.overview;
+  if (state.tab === "overview") {
+    if (!o) { p.innerHTML = "Loading…"; return; }
+    const stat = Object.fromEntries(o.stats.map(s => [s.label, s.count]));
+    p.innerHTML = `<div class="stats"><div><div class="big">${stat.Service}</div><div class="muted">services</div></div>
+      <div><div class="big">${stat.PackageVersion?.toLocaleString()}</div><div class="muted">package versions</div></div>
+      <div><div class="big">${stat.Vulnerability?.toLocaleString()}</div><div class="muted">advisories</div></div></div>
+      <p class="note">Services are real open-source repos at pinned versions; teams and customers are synthetic.</p>
+      <h3>Advisories reaching the most services</h3>` + o.top.map(a => `<div class="card list-item" data-id="${a.id}">
+      <div class="row"><span class="sev ${a.severity}">${a.severity}</span><b>${a.id}</b><span class="muted">${a.services} services</span></div>
+      <div class="muted">${esc(a.summary)}</div></div>`).join("");
+  } else if (!d) {
+    p.innerHTML = `<p class="muted">Trace an advisory to see its exposure, plan and decisions.</p>`;
+  } else if (state.tab === "exposure") {
+    const a = d.advisory, e = d.exposure, c = d.customers;
+    let h = `<div class="card"><div class="row"><span class="sev ${a.severity}">${a.severity}</span><b>${a.id}</b><span class="muted">${(a.aliases||[]).join(", ")}</span></div><div>${esc(a.summary)}</div></div>`;
+    h += precedentHtml(d.precedent);
+    if (!e.exposed) {
+      const sp = e.safety_proof;
+      h += `<div class="card"><div class="big" style="color:var(--ok)">No path found</div><p>${esc(sp.searched)}.</p>` +
+        sp.packages.map(pk => `<div><b>${esc(pk.package)}</b> affected: <code>${esc(pk.affected_ranges.join(" | "))}</code><br>
+          installed: ${pk.installed.length ? pk.installed.map(x => `<code>${esc(x.version)}</code> in ${x.services.length} services`).join(", ") : "nowhere"}</div>`).join("") +
+        (sp.dev_only_exposure.length ? `<p class="note">Dev tooling only: ${sp.dev_only_exposure.join(", ")}</p>` : "") + `</div>`;
+    } else {
+      h += `<div class="stats"><div><div class="big">${e.services.length}</div><div class="muted">services</div></div>
+        <div><div class="big">${c.customers.length}</div><div class="muted">customers</div></div>
+        <div><div class="big">${c.by_tier.enterprise}</div><div class="muted">enterprise</div></div></div>`;
+      h += e.services.map(s => `<div class="card"><div class="row"><b>${s.service}</b><span class="badge">${s.tier}</span><span class="muted">team ${s.team}</span></div>` +
+        s.paths.slice(0, 3).map(pt => `<div class="chain">${s.service} → ${pt.chain.map((x, i) => i === pt.chain.length - 1 ? `<b>${esc(x)}</b>` : esc(x)).join(" → ")}${pt.dev_only ? " (dev)" : ""}</div>`).join("") +
+        (s.paths.length > 3 ? `<div class="note">+${s.paths.length - 3} more</div>` : "") + `</div>`).join("");
+      h += `<h3>Customers</h3>` + c.customers.map(x => `<div class="row"><b>${esc(x.customer)}</b><span class="badge">${x.tier}</span><span class="muted">via ${x.exposed_through.map(t => t.via.join(" → ")).join("; ")}</span></div>`).join("");
+    }
+    p.innerHTML = h;
+  } else if (state.tab === "plan") {
+    if (!d.plan) { p.innerHTML = `<p class="muted">Nothing to fix: no exposure.</p>`; return; }
+    const pl = d.plan;
+    p.innerHTML = `<div class="stats"><div><div class="big">${pl.exposure_paths.toLocaleString()}</div><div class="muted">exposure chains</div></div>
+      <div><div class="big">${pl.total_actions}</div><div class="muted">changes remove all</div></div>
+      <div><div class="big">${pl.services.length}</div><div class="muted">services</div></div></div>
+      <p class="note">Least-effort cut from FalkorDB max-flow. Effort: refresh 1 · bump direct 2 · override 4 · upstream 6.</p>` +
+      pl.services.map(s => `<div class="card"><div class="row"><b>${s.repo}</b><span class="muted">${s.exposure_paths.toLocaleString()} chains · effort ${s.total_effort}</span>
+        <button class="ghost" style="margin-left:auto" data-issue="${s.repo}">Open issue…</button></div>
+        <ul>${s.actions.map(a => `<li>${esc(a.action)}</li>`).join("")}</ul></div>`).join("");
+  } else if (state.tab === "decisions") {
+    const svcs = d.exposure.services.map(s => s.service);
+    p.innerHTML = precedentHtml(d.precedent, true) + `<h3>Record a decision</h3>
+      <form class="form" id="decform"><select name="service">${(svcs.length ? svcs : ["storefront"]).map(s => `<option>${s}</option>`).join("")}</select>
+      <select name="verdict"><option>risk_accepted</option><option>not_affected</option><option>fix_planned</option><option>fixed</option></select>
+      <input name="person" placeholder="Who decided (e.g. Lena Fischer)" required><textarea name="reason" rows="3" placeholder="Why" required></textarea>
+      <button>Save to graph</button></form>
+      <p class="note">The decision stores the exact exposure paths it was made against. If a deploy adds a new path, it is marked stale.</p>
+      <button class="ghost" id="driftbtn">Re-check all decisions for drift</button><div id="driftout"></div>`;
+  }
+}
+
+function precedentHtml(prec, always) {
+  if (!prec.length) return always ? `<p class="muted">No past decisions about this advisory or its package.</p>` : "";
+  return `<h3>Precedent</h3>` + prec.map(x => `<div class="card"><div class="row"><span class="badge ${x.status}">${x.status}</span><b>${x.verdict}</b> for ${x.service}
+    <span class="muted">${x.same_advisory ? "this advisory" : "on " + x.about + " (same package " + x.package + ")"}</span></div>
+    <div>${esc(x.reason)}, <span class="muted">${esc(x.by)}, ${x.at.slice(0, 10)}</span></div>
+    ${x.stale_reason ? `<div class="note" style="color:var(--warn)">${esc(x.stale_reason)}</div>` : ""}</div>`).join("");
+}
+
+$("#panel").addEventListener("click", async ev => {
+  const item = ev.target.closest(".list-item"); if (item) return trace(item.dataset.id);
+  if (ev.target.dataset.issue) {
+    const svc = ev.target.dataset.issue;
+    if (!confirm(`Open a GitHub issue for ${svc} in ${state.overview.issue_repo}?`)) return;
+    try { const r = await api("/api/issues", { body: JSON.stringify({ vulnerability_id: state.data.advisory.id, service: svc }) });
+      alert(r.opened ? "Opened: " + r.url : "Not opened (" + r.reason + "). Draft:\n\n" + r.draft.title + "\n\n" + r.draft.body);
+    } catch (e) { alert(e.message); }
+  }
+  if (ev.target.id === "driftbtn") {
+    const r = await api("/api/drift", { method: "POST" });
+    $("#driftout").innerHTML = r.length ? r.map(x => `<div class="card"><b>${x.decision}</b> on ${x.service} is now stale: ${esc(x.new_paths.join("; "))}</div>`).join("") : `<p class="muted">All decisions still match today's graph.</p>`;
+  }
+});
+$("#panel").addEventListener("submit", async ev => {
+  if (ev.target.id !== "decform") return; ev.preventDefault();
+  const f = Object.fromEntries(new FormData(ev.target));
+  await api("/api/decisions", { body: JSON.stringify({ ...f, vulnerability_id: state.data.advisory.id }) });
+  await trace(state.data.advisory.id); setTab("decisions");
+});
+$("#tabs").addEventListener("click", ev => ev.target.dataset.t && setTab(ev.target.dataset.t));
+$("#dev").addEventListener("change", () => { loadOverview(); if (state.data) trace(state.data.advisory.id); });
+$("#search").addEventListener("submit", async ev => {
+  ev.preventDefault(); const q = $("#q").value.trim(); if (!q) return;
+  const hits = await api("/api/search?q=" + encodeURIComponent(q));
+  if (!hits.length) return alert("No advisory found");
+  if (hits.length === 1 || hits[0].id.toLowerCase() === q.toLowerCase() || (hits[0].aliases || []).includes(q.toUpperCase())) return trace(hits[0].id);
+  state.data = null; setTab("overview");
+  $("#panel").innerHTML = `<h3>Matches</h3>` + hits.map(a => `<div class="card list-item" data-id="${a.id}"><div class="row"><span class="sev ${a.severity}">${a.severity}</span><b>${a.id}</b></div><div class="muted">${esc(a.summary)}</div></div>`).join("");
+});
+
+function addMsg(who, text, tools) {
+  const div = document.createElement("div"); div.className = "msg " + who;
+  div.innerHTML = `<div class="who">${who === "user" ? "You" : "Blast Radius"}</div>` +
+    (tools && tools.length ? `<div class="tools">${tools.map(t => `<span>${t.tool}</span>`).join("")}</div>` : "") +
+    `<div class="body">${who === "user" ? esc(text) : marked.parse(text)}</div>`;
+  $("#chat").appendChild(div); $("#chat").scrollTop = 1e9;
+}
+$("#chatform").addEventListener("submit", async ev => {
+  ev.preventDefault(); const q = $("#cq").value.trim(); if (!q) return;
+  $("#cq").value = ""; addMsg("user", q);
+  const btn = ev.target.querySelector("button"); btn.disabled = true; btn.textContent = "Thinking…";
+  try {
+    const r = await api("/api/chat", { body: JSON.stringify({ session_id: session, message: q }) });
+    addMsg("agent", r.answer, r.tool_calls);
+    const vid = [...r.tool_calls].reverse().map(t => t.input.vulnerability_id).find(Boolean);
+    if (vid) trace(vid);
+  } catch (e) { addMsg("agent", "⚠️ " + e.message); }
+  btn.disabled = false; btn.textContent = "Ask";
+});
+loadOverview();
+</script>
+</body>
+</html>

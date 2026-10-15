@@ -39,6 +39,7 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 | D-027 | 2026-10-15 | Issues are only ever opened in our own repo, never in the upstream projects | Accepted | Claude |
 | D-028 | 2026-10-15 | Decisions store their exposure signatures and survive graph rebuilds; drift is checked on every rebuild | Accepted | Claude |
 | D-029 | 2026-10-15 | Episodic memory: each question, answer and cited nodes stored as `Session`/`Question` | Accepted | Claude |
+| D-030 | 2026-10-15 | Web UI: one static page served by FastAPI, JS libraries vendored | Accepted | Claude |
 
 ## Entries
 
@@ -198,6 +199,11 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
 - **Decision:** After each answer, the agent writes `(:Session)-[:ASKED]->(:Question {text, answer, tools, at})-[:CITED]->(:Vulnerability|:Service)`.
 - **Reason:** Track 2 asks for persistent conversation history. Linking questions to the nodes they cited makes history queryable through the graph ("what have we asked about storefront?") rather than kept as a flat log. Unlike decisions, sessions are not yet carried across graph rebuilds; that's a possible follow-up.
+
+### D-030: Web UI is one static page with vendored libraries
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Claude
+- **Decision:** FastAPI serves JSON endpoints and a single `index.html` (vanilla JS, Cytoscape.js 3.28.1 for the path graph, marked 12.0.2 for agent answers). The two libraries are committed in `static/vendor/` instead of loaded from a CDN. The graph, plan, decision and drift views call the graph directly, so they work without a Claude API key; only the chat needs one.
+- **Reason:** No frontend build chain to maintain in a solo 3-day build. Vendoring avoids depending on a CDN during the live demo, and the CDN was blocked from our build environment anyway. Keeping the graph views usable without the LLM means the demo still shows the graph's work if the API has a problem.
 
 <!-- Template for new entries:
 ### D-0NN: <short title>

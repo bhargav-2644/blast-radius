@@ -19,6 +19,20 @@ uv run pytest                 # tests (needs FalkorDB running)
 uv run python -m blast_radius.ingest.load   # build the graph (~15 s)
 ```
 
+Then:
+
+```bash
+uv run uvicorn blast_radius.web:app      # web app on http://localhost:8000 (graph views work without an API key)
+uv run python -m blast_radius.agent "Are we affected by CVE-2025-7783?"   # agent in the terminal
+uv run python -m blast_radius.mcp_server # the graph tools as an MCP server (stdio), e.g. for Claude Desktop
+```
+
+Simulate a deploy and watch past decisions drift:
+
+```bash
+uv run python -m blast_radius.ingest.load --deploy storefront=data/scenarios/storefront-adds-koa-router.json.gz
+```
+
 The demo company's 14 services are real public repos at pinned versions (lockfiles committed in `data/lockfiles/`); teams, customers and service calls are synthetic (`data/company.json`).
 
 ## Graph data model
