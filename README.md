@@ -29,7 +29,7 @@ uv run python -m blast_radius.agent "Are we affected by CVE-2025-7783?"   # agen
 uv run python -m blast_radius.mcp_server # the graph tools as an MCP server (stdio), e.g. for Claude Desktop
 ```
 
-Simulate a deploy and watch past decisions drift:
+Simulate a deploy and watch past decisions drift: in the web app, open **Decisions** and press **Deploy** (then **Roll back**). This swaps storefront's dependency tree in place, in under a second, and re-checks every decision. Scenarios are listed in `data/scenarios/scenarios.json`. From the command line, a full rebuild with the swapped lockfile does the same:
 
 ```bash
 uv run python -m blast_radius.ingest.load --deploy storefront=data/scenarios/storefront-adds-koa-router.json.gz

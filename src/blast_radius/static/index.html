@@ -161,6 +161,7 @@ pre.code { margin: 0; background: var(--code-bg); color: var(--code-ink); paddin
 .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 4px 10px; font-size: 12px; font-weight: 500; color: var(--accent); }
 .btn:hover { border-color: var(--accent); }
 .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: default; }
 .muted { color: var(--muted); } .small { font-size: 12px; }
 #raw { font-family: var(--mono); font-size: 11px; padding: 8px 12px; overflow: auto; flex: 1; white-space: pre; color: var(--muted); }
 #raw .ev { padding: 1px 0; border-bottom: 1px dashed var(--line); overflow: hidden; text-overflow: ellipsis; }
@@ -562,13 +563,29 @@ document.addEventListener("click", async e => {
 /* ---------------- decisions tab ---------------- */
 async function loadDecisions() {
   const box = $("#decisions"); box.innerHTML = `<div class="small muted">Loading…</div>`;
-  const list = await api("/api/decisions");
-  box.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><b class="small">${list.length} decisions in the graph</b><button class="btn" style="margin-left:auto" id="drift">Re-check for drift</button></div><div id="driftout"></div>` +
+  const [list, scen] = await Promise.all([api("/api/decisions"), api("/api/scenarios")]);
+  box.innerHTML = scen.map(s => `<div class="card"><h4>Simulate a deploy<span class="src">${s.active ? "deployed" : "not deployed"}</span></h4>
+      <div class="small"><b>${esc(s.title)}.</b> ${esc(s.description)}</div>
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="btn primary" data-scen="${esc(s.id)}" ${s.active ? "disabled" : ""}>Deploy</button><button class="btn" data-scen="${esc(s.id)}" data-rollback="1" ${s.active ? "" : "disabled"}>Roll back</button></div>
+      ${list.some(d => d.service === s.service) ? "" : `<div class="small muted" style="margin-top:6px">Tip: record a decision for ${esc(s.service)} first (e.g. on GHSA-9wv6-86v2-598j), then deploy and watch it go stale.</div>`}</div>`).join("") +
+    `<div id="deployout"></div><div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><b class="small">${list.length} decisions in the graph</b><button class="btn" style="margin-left:auto" id="drift">Re-check for drift</button></div><div id="driftout"></div>` +
     (list.length ? list.map(d => `<div class="card"><h4><span class="sev ${d.status === "stale" ? "MODERATE" : ""}">${esc(d.status)}</span>${esc(d.verdict)} · ${esc(d.service)}</h4>${d.stale_reason ? `<div class="small warn-t">${esc(d.stale_reason)}</div>` : ""}<div class="small mono">${esc(d.vuln)}</div><div class="small">${esc(d.reason)}</div><div class="small muted">${esc(d.person)} · ${esc((d.at || "").slice(0, 10))}</div></div>`).join("") : `<div class="small muted">No decisions yet. Tell the agent what you decided, and who decided it.</div>`) +
     (T.vuln ? `<h4 class="small" style="margin:14px 0 0">Record a decision on ${esc(T.vuln)}</h4><form class="form" id="decform">
       <input name="service" placeholder="service, e.g. storefront" required><select name="verdict"><option>risk_accepted</option><option>not_affected</option><option>fix_planned</option><option>fixed</option></select>
       <input name="person" placeholder="who decided" required><textarea name="reason" rows="2" placeholder="why" required></textarea><button class="btn primary">Save to graph</button></form>` : "");
 }
+$("#decisions").addEventListener("click", async e => {
+  const b = e.target.closest("[data-scen]"); if (!b) return;
+  b.disabled = true; b.textContent = b.dataset.rollback ? "Rolling back…" : "Deploying…";
+  try {
+    const r = await api(`/api/scenarios/${encodeURIComponent(b.dataset.scen)}${b.dataset.rollback ? "?rollback=true" : ""}`, { method: "POST" });
+    await loadDecisions();
+    $("#deployout").innerHTML = `<div class="card small">Loaded ${esc(r.lockfile)} into ${esc(r.service)} (${r.installs} installs) in ${r.seconds}s. ` +
+      (r.drift.length ? r.drift.map(x => `<div class="warn-t">${esc(x.decision)} (${esc(x.verdict)} by ${esc(x.made_by)}) on ${esc(x.vulnerability)} is now stale: ${esc(x.new_paths.join("; "))}</div>`).join("") : "") +
+      (r.recovered.length ? r.recovered.map(x => `<div class="ok-t">${esc(x.decision)} (${esc(x.verdict)}) on ${esc(x.vulnerability)} matches the graph again.</div>`).join("") : "") +
+      (!r.drift.length && !r.recovered.length ? `<span class="ok-t">No decision changed.</span>` : "") + `</div>`;
+  } catch (err) { $("#deployout").innerHTML = `<div class="card small warn-t">${esc(err.message)}</div>`; }
+});
 $("#decisions").addEventListener("click", async e => {
   if (e.target.id !== "drift") return;
   const r = await api("/api/drift", { method: "POST" });

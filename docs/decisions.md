@@ -236,6 +236,13 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Decision:** The graph runs on a free FalkorDB Cloud instance. The app runs on Render from `render.yaml` (Docker, free plan, `/healthz` check) and builds the graph on first start (`blast_radius.seed`).
 - **Reason:** Hosting the graph on FalkorDB's own cloud shows the graph is central to the product, and both tiers are free. The container also runs anywhere with `docker compose --profile app up`.
 
+### D-036: Live deploy on Render (Oregon) against FalkorDB Cloud (Mumbai)
+- **Date:** 2026-10-15 · **Status:** Accepted · **By:** Bobby
+- **Decision:** The app runs as Render web service `blast-radius` (free plan, Docker, branch `main`, auto-deploy on push) at https://blast-radius-0sou.onrender.com, created through the Render connector. It talks to a FalkorDB Cloud instance in AWS ap-south-1. Secrets (FalkorDB username/password, `ANTHROPIC_API_KEY`) were entered by Bobby in Render's dashboard and are not in the repo or chat. The first start built the graph in FalkorDB Cloud in 24 s (14 services, 7,643 package versions, 1,125 advisories).
+- **Reason:** Render is the first environment where agent mode can run, because cloud build sessions cannot see an Anthropic key. The connector cannot set `healthCheckPath`, so `/healthz` is set by hand in Render's settings. The repo is private, so Render's GitHub app needed access to it.
+- **Verified:** 2026-10-15 20:01 UTC, Bobby ran agent mode on the live URL (question on GHSA-fjxv-7rqg-78g4). Render logs show `POST /api/run` 200 and three Claude API calls, all 200, with the answer finished in about 25 s and no errors. A restart found the graph already in FalkorDB Cloud and skipped the rebuild.
+- **Alternatives:** Render Singapore would sit closer to the Mumbai database than Oregon; we kept Oregon unless the demo feels slow, since a region change means recreating the service.
+
 <!-- Template for new entries:
 ### D-0NN: <short title>
 - **Date:** YYYY-MM-DD · **Status:** Proposed | Accepted | Superseded by D-0NN | Rejected · **By:** <name>
@@ -243,3 +250,14 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Reason:** <why — the facts and trade-offs>
 - **Alternatives:** <what we didn't pick and why> (optional)
 -->
+
+### D-037: Spend Thursday and Friday on product improvements before submission prep
+- **Date:** 2026-10-16 · **Status:** Proposed · **By:** Bobby
+- **Decision:** With F1–F8 built and the live deploy working, use the time before Saturday's submission work for a short list of improvements: (1) simulate a deploy from the browser, (2) rank advisories by business impact, (3) one fix plan across the whole estate, (4) precedent through a shared dependency path, (5) record "not affected" from a proof of safety. Claude recommended 1, 2 and 4; Bobby picks the set. Item 1 is built first because it is in every option.
+- **Reason:** Drift (F6) is the most distinctive feature but was only demoable from the command line, and the landing view still ranked like a per-repo scanner. Keeping the list to about six hours leaves Saturday for the README, the data-model diagram and the demo video.
+
+### D-038: Simulated deploys swap one service's subgraph in place
+- **Date:** 2026-10-16 · **Status:** Accepted · **By:** Claude
+- **Decision:** `ingest.load.redeploy(service, lockfile)` replaces only that service's `Install` nodes and `REQUIRES` edges, MERGEs any new package versions and advisories, drops package versions no service installs any more, records the lockfile on the `Repo`, then runs `check_drift` and a new `check_recovered`, which returns a stale decision to `current` when its exposure is back inside what was decided (a rollback). The web app exposes it as **Deploy / Roll back** on the Decisions tab (`GET /api/scenarios`, `POST /api/scenarios/{id}[?rollback=true]`), one deploy at a time, from `data/scenarios/scenarios.json`. It is not an agent tool.
+- **Reason:** A full rebuild took 24 s on FalkorDB Cloud, empties the graph while visitors are using it, and drops conversation history (D-029). The in-place swap takes about 0.5 s locally and touches nothing else, which is also how a real deploy hook would update the graph. Rollback makes the demo repeatable on the public URL. Changing shared data stays a human button rather than an agent tool, in line with D-012.
+- **Verified:** 2026-10-16, `tests/test_drift.py`: a `risk_accepted` decision on GHSA-9wv6-86v2-598j for storefront goes stale with "@koa/router@10.1.1 → path-to-regexp@6.2.1" after the deploy, returns to `current` after the rollback, and node counts per label match the original graph. Browser check of the buttons with Playwright.

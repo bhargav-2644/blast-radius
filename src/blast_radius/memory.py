@@ -61,6 +61,18 @@ def check_drift() -> list[dict]:
     return stale
 
 
+def check_recovered() -> list[dict]:
+    """Stale decisions whose exposure is back inside what was decided (e.g. a deploy was rolled back)."""
+    back = []
+    for d in _rows("current_decisions"):
+        if d["status"] == "stale" and set(_signatures(d["vuln"], d["service"])) <= set(d["signatures"] or []):
+            graph().query("MATCH (d:Decision {id: $id}) SET d.status = 'current', d.stale_reason = null",
+                          {"id": d["id"]})
+            back.append({"decision": d["id"], "vulnerability": d["vuln"], "service": d["service"],
+                         "verdict": d["verdict"]})
+    return back
+
+
 # ------------------------------------------------ keep memory across graph rebuilds
 
 def export_memory() -> list[dict]:

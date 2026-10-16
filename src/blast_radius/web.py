@@ -5,6 +5,7 @@ Run: uv run uvicorn blast_radius.web:app --reload
 import asyncio
 import json
 import os
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from pydantic import BaseModel
 
 from blast_radius import analysis, config, memory
 from blast_radius.agent import agent_available
+from blast_radius.ingest.load import DATA, redeploy
 from blast_radius.mcp_server import draft_issue
 
 STATIC = Path(__file__).parent / "static"
@@ -134,6 +136,32 @@ def decisions():
 @app.post("/api/drift")
 def drift():
     return memory.check_drift()
+
+
+SCENARIOS = {s["id"]: s for s in json.loads((DATA / "scenarios/scenarios.json").read_text())}
+deploy_lock = threading.Lock()  # one simulated deploy at a time
+
+
+@app.get("/api/scenarios")
+def scenarios():
+    """Simulated deploys (F6), and which one each service is running now."""
+    live = {r["repo"]: r["lockfile"] for r in analysis._rows("repo_lockfiles")}
+    return [{**s, "active": live.get(s["service"]) == s["lockfile"]} for s in SCENARIOS.values()]
+
+
+@app.post("/api/scenarios/{scenario_id}")
+def simulate_deploy(scenario_id: str, rollback: bool = False):
+    """Swap one service's lockfile in place (or roll it back) and report which decisions drifted."""
+    s = SCENARIOS.get(scenario_id)
+    if not s:
+        raise HTTPException(404, f"unknown scenario {scenario_id}")
+    lock = DATA / "lockfiles" / f"{s['service']}.json.gz" if rollback else DATA / "scenarios" / s["lockfile"]
+    if not deploy_lock.acquire(timeout=60):
+        raise HTTPException(409, "another deploy is running")
+    try:
+        return redeploy(s["service"], lock)
+    finally:
+        deploy_lock.release()
 
 
 class IssueIn(BaseModel):
