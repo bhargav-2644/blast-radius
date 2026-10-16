@@ -85,6 +85,25 @@ def upgrade_plan(vulnerability_id: str, include_dev: bool = False) -> str:
 
 @server.tool()
 @traced
+def estate_plan(include_dev: bool = False) -> str:
+    """One fix plan for every CRITICAL and HIGH advisory at once: per service, a single min cut
+    (FalkorDB max-flow) that removes every path to any of them, then identical changes grouped
+    across services and ranked by how many advisories each addresses. Compare total_changes with
+    one_by_one_fixes to show what fixing together saves. Slow (several seconds)."""
+    return _json(analysis.estate_plan(include_dev=include_dev))
+
+
+@server.tool()
+@traced
+def risk_board(limit: int = 10, include_dev: bool = False) -> str:
+    """What to look at first: advisories that reach production, ranked by severity times the
+    customers they reach (enterprise customers weigh most) and services, with each one's triage
+    status from decision memory (untriaged, partly triaged, triaged, stale). Untriaged first."""
+    return _json(analysis.risk_board(limit, include_dev))
+
+
+@server.tool()
+@traced
 def chokepoints(limit: int = 10) -> str:
     """Packages the whole estate depends on most (PageRank over the package graph), with how many
     services install each and how many advisories affect it."""
@@ -103,8 +122,9 @@ def record_decision(vulnerability_id: str, service: str, verdict: str, reason: s
 @server.tool()
 @traced
 def recall_precedent(vulnerability_id: str) -> str:
-    """Past decisions about this advisory, or about other advisories on the same package, with who
-    made them, why, and whether they are still current or have gone stale."""
+    """Past decisions about this advisory, about other advisories on the same package, or about
+    advisories reached through the same dependency chain (`match`, `via`), with who made them, why,
+    and whether they are still current or have gone stale."""
     return _json(memory.recall_precedent(vulnerability_id))
 
 

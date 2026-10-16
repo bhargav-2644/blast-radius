@@ -1,0 +1,9 @@
+[
+  {
+    "id": "storefront-adds-koa-router",
+    "service": "storefront",
+    "lockfile": "storefront-adds-koa-router.json.gz",
+    "title": "storefront adds @koa/router",
+    "description": "A synthetic change to storefront's lockfile that adds @koa/router 10.1.1, which pulls in path-to-regexp 6.2.1. Any decision on a path-to-regexp advisory for storefront was made without this path."
+  }
+]

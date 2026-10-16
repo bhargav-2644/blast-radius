@@ -72,6 +72,17 @@ code, pre, .mono { font-family: var(--mono); font-size: 12px; }
 .chips { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; text-align: left; }
 .chip { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 12px 14px; }
 .chip:hover { border-color: var(--accent); }
+.board { margin-top: 22px; text-align: left; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); overflow: hidden; }
+.board .bh { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.board .bh b { font-size: 13px; white-space: nowrap; } .board .bh span { font-size: 11.5px; color: var(--muted); }
+.brow { display: grid; grid-template-columns: 74px 1fr 64px 92px 104px; gap: 10px; align-items: center; width: 100%; text-align: left;
+        border: 0; border-top: 1px solid var(--line); background: none; padding: 8px 14px; font-size: 12px; color: var(--ink); cursor: pointer; }
+.brow:first-of-type { border-top: 0; } .brow:hover { background: var(--sunk); }
+.brow .id { font-family: var(--mono); font-size: 11.5px; } .brow .sum { display: block; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.brow .num { color: var(--muted); } .brow .num b { color: var(--ink); }
+.tri { font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 99px; background: var(--sunk); color: var(--muted); justify-self: start; }
+.tri.untriaged, .tri.stale { color: var(--warn); }
+@media (max-width: 700px) { .brow { grid-template-columns: 64px 1fr 80px; } .brow .num { display: none; } }
 .chip b { display: block; font-size: 13px; margin-bottom: 2px; } .chip span { font-size: 12px; color: var(--muted); }
 .banner { margin: 0 0 16px; padding: 10px 14px; border-radius: 10px; background: var(--accent-soft); font-size: 13px; color: var(--muted); }
 .banner b { color: var(--ink); }
@@ -161,6 +172,7 @@ pre.code { margin: 0; background: var(--code-bg); color: var(--code-ink); paddin
 .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 4px 10px; font-size: 12px; font-weight: 500; color: var(--accent); }
 .btn:hover { border-color: var(--accent); }
 .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.btn:disabled { opacity: .45; cursor: default; }
 .muted { color: var(--muted); } .small { font-size: 12px; }
 #raw { font-family: var(--mono); font-size: 11px; padding: 8px 12px; overflow: auto; flex: 1; white-space: pre; color: var(--muted); }
 #raw .ev { padding: 1px 0; border-bottom: 1px dashed var(--line); overflow: hidden; text-overflow: ellipsis; }
@@ -233,7 +245,7 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = n => Number(n || 0).toLocaleString();
-const ICON = { find_vulnerability: "🔎", find_exposure: "🧬", customer_impact: "👥", upgrade_plan: "✂️", chokepoints: "📍",
+const ICON = { find_vulnerability: "🔎", find_exposure: "🧬", customer_impact: "👥", upgrade_plan: "✂️", chokepoints: "📍", risk_board: "📊", estate_plan: "🧯",
   record_decision: "📝", recall_precedent: "🧠", check_drift: "↻", draft_issue: "🎫", update_plan: "☑️" };
 const EXAMPLES = [
   ["Are we affected by CVE-2025-7783?", "Critical form-data advisory, three services deep"],
@@ -351,10 +363,38 @@ function showEmpty() {
   $("#feed").innerHTML = `<div class="empty"><h1>What does this CVE mean for us?</h1>
     <p>Blast Radius traces an advisory through every service's full dependency tree to customers and past decisions, then finds the least-effort fix with FalkorDB max-flow. You see each step and query as it runs.</p>
     ${S.agentOK ? "" : `<div class="banner"><b>Pipeline mode.</b> No <code>ANTHROPIC_API_KEY</code> on the server, so a fixed triage sequence runs through the same MCP tools. Set the key to let Claude choose the tools.</div>`}
-    <div class="chips">${EXAMPLES.map(([q, d]) => `<button class="chip" data-q="${esc(q)}"><b>${esc(q)}</b><span>${esc(d)}</span></button>`).join("")}</div></div>`;
+    <div class="chips">${EXAMPLES.map(([q, d]) => `<button class="chip" data-q="${esc(q)}"><b>${esc(q)}</b><span>${esc(d)}</span></button>`).join("")}</div>
+    <div class="board" id="board"></div></div>`;
+  renderBoard();
+}
+// Risk board: production advisories ranked by business impact, untriaged first (queries/risk_board.cypher)
+async function renderBoard() {
+  let rows; try { rows = await api("/api/risk_board"); } catch { return; }
+  const box = $("#board"); if (!box) return;
+  box.innerHTML = `<div class="bh"><b>Risk board</b><span>ranked by severity × customers reached (enterprise weighs most) and services, needing a decision first</span><button class="btn" id="estate" style="margin-left:auto;white-space:nowrap">Fix all critical + high</button></div><div id="estateout"></div>` +
+    rows.map(r => `<button class="brow" data-q="${esc(`Who is impacted by ${r.id} and what's the smallest fix?`)}">
+      <span class="sev ${esc(r.severity)}">${esc(r.severity)}</span>
+      <span><span class="id">${esc(r.id)}</span><span class="sum">${esc(r.summary)}</span></span>
+      <span class="num"><b>${r.services}</b> service${r.services > 1 ? "s" : ""}</span>
+      <span class="num"><b>${r.customers}</b> customers${r.enterprise ? ` · ${r.enterprise} ent.` : ""}</span>
+      <span class="tri ${esc(r.triage.split(" ")[0])}">${esc(r.triage)}</span></button>`).join("");
+}
+$("#feed").addEventListener("click", async e => {
+  if (e.target.id !== "estate") return;
+  const b = e.target, out = $("#estateout"); b.disabled = true; b.textContent = "Cutting every path…";
+  out.innerHTML = `<div class="small muted" style="padding:10px 14px">Running one max-flow cut per service over every critical and high advisory…</div>`;
+  try { out.innerHTML = estateCard(await api("/api/estate_plan")); } catch (err) { out.innerHTML = `<div class="small warn-t" style="padding:10px 14px">${esc(err.message)}</div>`; }
+  b.textContent = "Fix all critical + high"; b.disabled = false;
+});
+function estateCard(r) {
+  return `<div style="padding:10px 14px;border-bottom:1px solid var(--line)">
+    <div class="stats" style="grid-template-columns:repeat(4,1fr)"><div><b>${r.advisories}</b>advisories</div><div><b>${r.total_changes}</b>changes together</div><div><b>${r.one_by_one_fixes}</b>fixes one by one</div><div><b>${r.services.length}</b>services</div></div>
+    <div class="small muted" style="margin:6px 0">${Object.entries(r.by_severity).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(", ")}, in production. One min cut per service removes every path to all of them; the changes that address the most advisories come first.</div>
+    ${r.changes.slice(0, 8).map(c => `<div class="small" style="margin-top:6px"><b>${c.advisories.length} advisories</b> · ${esc(c.action)} <span class="muted">in ${esc(c.services.join(", "))}</span></div>`).join("")}
+    ${r.changes.length > 8 ? `<div class="small muted" style="margin-top:6px">+${r.changes.length - 8} smaller changes</div>` : ""}</div>`;
 }
 $("#feed").addEventListener("click", e => {
-  const chip = e.target.closest(".chip"); if (chip) { $("#input").value = chip.dataset.q; run(); return; }
+  const chip = e.target.closest(".chip, .brow"); if (chip) { $("#input").value = chip.dataset.q; run(); return; }
   const hd = e.target.closest(".step > .hd"); if (hd) { hd.parentElement.classList.toggle("open"); return; }
   const tab = e.target.closest(".tabs button");
   if (tab) { const step = tab.closest(".step");
@@ -383,6 +423,8 @@ function summarize(tool, input, r) {
     case "recall_precedent": return r.length ? `${r.length} past decision${r.length > 1 ? "s" : ""}` : "no precedent";
     case "check_drift": return r.length ? `${r.length} decision(s) stale` : "all decisions current";
     case "chokepoints": return `${r.length} packages`;
+    case "estate_plan": return `${r.total_changes} changes for ${r.advisories} advisories`;
+    case "risk_board": return `${r.filter(x => x.triage !== "triaged").length} need a decision`;
     case "record_decision": return `saved ${r.id || ""}`;
     case "draft_issue": return r.title || "";
   }
@@ -498,7 +540,7 @@ function addFinding(html) {
 }
 function precedentCards(r, src) {
   return r.map(x => `<div class="card"><h4><span class="sev ${x.status === "stale" ? "MODERATE" : ""}">${esc(x.status)}</span>${esc(x.verdict)} · ${esc(x.service)}<span class="src">${src}</span></h4>
-    <div class="small">${esc(x.reason)}</div><div class="small muted">${esc(x.by)}, ${esc((x.at || "").slice(0, 10))} · ${x.same_advisory ? "this advisory" : "same package " + esc(x.package)}</div>
+    <div class="small">${esc(x.reason)}</div><div class="small muted">${esc(x.by)}, ${esc((x.at || "").slice(0, 10))} · ${x.match === "path" ? `${esc(x.about)}, through the same ${esc(x.via.join(", "))}` : x.same_advisory ? "this advisory" : "same package " + esc(x.package)}</div>
     ${x.stale_reason ? `<div class="small warn-t">${esc(x.stale_reason)}</div>` : ""}</div>`).join("");
 }
 function finding(ev) {
@@ -515,7 +557,8 @@ function finding(ev) {
       const sp = r.safety_proof;
       addFinding(`<div class="card"><h4><span class="ok-t">No path found: safe in production</span><span class="src">${src}</span></h4>
         <div class="small muted">${esc(sp.searched)}</div>` + sp.packages.map(pk => `<div class="small" style="margin-top:4px"><b>${esc(pk.package)}</b> affected <code>${esc(pk.affected_ranges.join(" | "))}</code>; installed ${pk.installed.length ? pk.installed.map(x => `<code>${esc(x.version)}</code>`).join(", ") : "nowhere"}</div>`).join("") +
-        (sp.dev_only_exposure.length ? `<div class="small muted">Dev tooling only: ${esc(sp.dev_only_exposure.join(", "))}</div>` : "") + `</div>`);
+        (sp.dev_only_exposure.length ? `<div class="small muted">Dev tooling only: ${esc(sp.dev_only_exposure.join(", "))}</div>` : "") +
+        (sp.packages.some(pk => pk.installed.length) ? `<form class="naform" data-vuln="${esc(r.vulnerability)}" style="display:flex;gap:6px;margin-top:8px"><input name="person" placeholder="who signs off" required style="flex:1"><button class="btn">Record as not affected</button></form><div class="small naout"></div>` : "") + `</div>`);
     } else {
       addFinding(`<div class="card"><h4>Exposure · ${r.services.length} services<span class="src">${src}</span></h4>` + r.services.map(s =>
         `<div style="margin-top:6px"><b class="small">${esc(s.service)}</b> <span class="small muted">${esc(s.tier)} · ${esc(s.team)}</span>` +
@@ -540,6 +583,10 @@ function finding(ev) {
   } else if (src === "draft_issue") {
     addFinding(`<div class="card"><h4>Issue draft<span class="src">${src}</span></h4><div class="small"><b>${esc(r.title)}</b></div>
       <button class="btn" style="margin-top:6px" data-issue="${esc(ev.input.service)}" data-vuln="${esc(ev.input.vulnerability_id)}">Review and open…</button></div>`);
+  } else if (src === "estate_plan") {
+    addFinding(`<div class="card"><h4>Estate fix plan<span class="src">${src}</span></h4>${estateCard(r)}</div>`);
+  } else if (src === "risk_board") {
+    addFinding(`<div class="card"><h4>Risk board<span class="src">${src}</span></h4>${r.map(x => `<div class="small"><span class="sev ${esc(x.severity)}">${esc(x.severity)}</span> <code>${esc(x.id)}</code> <span class="muted">${x.services} services · ${x.customers} customers (${x.enterprise} enterprise) · ${esc(x.triage)}</span></div>`).join("")}</div>`);
   } else if (src === "chokepoints") {
     addFinding(`<div class="card"><h4>Chokepoints<span class="src">${src}</span></h4>${r.map(x => `<div class="small"><code>${esc(x.package)}@${esc(x.version)}</code> <span class="muted">${x.services} services · ${x.advisories} advisories</span></div>`).join("")}</div>`);
   }
@@ -559,16 +606,52 @@ document.addEventListener("click", async e => {
   };
 });
 
+$("#findings").addEventListener("submit", async e => {
+  if (!e.target.classList.contains("naform")) return;
+  e.preventDefault(); const f = e.target, out = f.nextElementSibling, b = f.querySelector("button");
+  b.disabled = true;
+  try {
+    const r = await api(`/api/advisory/${encodeURIComponent(f.dataset.vuln)}/not_affected`, { body: JSON.stringify({ person: f.person.value }) });
+    f.remove(); out.innerHTML = `<span class="ok-t">Saved ${r.decisions.length} not_affected decision${r.decisions.length > 1 ? "s" : ""} (${esc(r.services.join(", "))}). A deploy that brings in an affected version will mark them stale.</span>`;
+  } catch (err) { b.disabled = false; out.innerHTML = `<span class="warn-t">${esc(err.message)}</span>`; }
+});
+
 /* ---------------- decisions tab ---------------- */
+// one card per sign-off: the same verdict, reason and person across several services
+function groupDecisions(list) {
+  const out = new Map();
+  for (const d of list) {
+    const k = [d.vuln, d.verdict, d.reason, d.person, d.status, d.stale_reason].join("\u0000");
+    if (!out.has(k)) out.set(k, { ...d, services: [] });
+    out.get(k).services.push(d.service);
+  }
+  return [...out.values()];
+}
 async function loadDecisions() {
   const box = $("#decisions"); box.innerHTML = `<div class="small muted">Loading…</div>`;
-  const list = await api("/api/decisions");
-  box.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><b class="small">${list.length} decisions in the graph</b><button class="btn" style="margin-left:auto" id="drift">Re-check for drift</button></div><div id="driftout"></div>` +
-    (list.length ? list.map(d => `<div class="card"><h4><span class="sev ${d.status === "stale" ? "MODERATE" : ""}">${esc(d.status)}</span>${esc(d.verdict)} · ${esc(d.service)}</h4>${d.stale_reason ? `<div class="small warn-t">${esc(d.stale_reason)}</div>` : ""}<div class="small mono">${esc(d.vuln)}</div><div class="small">${esc(d.reason)}</div><div class="small muted">${esc(d.person)} · ${esc((d.at || "").slice(0, 10))}</div></div>`).join("") : `<div class="small muted">No decisions yet. Tell the agent what you decided, and who decided it.</div>`) +
+  const [list, scen] = await Promise.all([api("/api/decisions"), api("/api/scenarios")]);
+  box.innerHTML = scen.map(s => `<div class="card"><h4>Simulate a deploy<span class="src">${s.active ? "deployed" : "not deployed"}</span></h4>
+      <div class="small"><b>${esc(s.title)}.</b> ${esc(s.description)}</div>
+      <div style="display:flex;gap:8px;margin-top:8px"><button class="btn primary" data-scen="${esc(s.id)}" ${s.active ? "disabled" : ""}>Deploy</button><button class="btn" data-scen="${esc(s.id)}" data-rollback="1" ${s.active ? "" : "disabled"}>Roll back</button></div>
+      ${list.some(d => d.service === s.service) ? "" : `<div class="small muted" style="margin-top:6px">Tip: record a decision for ${esc(s.service)} first (e.g. on GHSA-9wv6-86v2-598j), then deploy and watch it go stale.</div>`}</div>`).join("") +
+    `<div id="deployout"></div><div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><b class="small">${list.length} decisions in the graph</b><button class="btn" style="margin-left:auto" id="drift">Re-check for drift</button></div><div id="driftout"></div>` +
+    (list.length ? groupDecisions(list).map(d => `<div class="card"><h4><span class="sev ${d.status === "stale" ? "MODERATE" : ""}">${esc(d.status)}</span>${esc(d.verdict)} · ${esc(d.services.join(", "))}</h4>${d.stale_reason ? `<div class="small warn-t">${esc(d.stale_reason)}</div>` : ""}<div class="small mono">${esc(d.vuln)}</div><div class="small">${esc(d.reason)}</div><div class="small muted">${esc(d.person)} · ${esc((d.at || "").slice(0, 10))}</div></div>`).join("") : `<div class="small muted">No decisions yet. Tell the agent what you decided, and who decided it.</div>`) +
     (T.vuln ? `<h4 class="small" style="margin:14px 0 0">Record a decision on ${esc(T.vuln)}</h4><form class="form" id="decform">
       <input name="service" placeholder="service, e.g. storefront" required><select name="verdict"><option>risk_accepted</option><option>not_affected</option><option>fix_planned</option><option>fixed</option></select>
       <input name="person" placeholder="who decided" required><textarea name="reason" rows="2" placeholder="why" required></textarea><button class="btn primary">Save to graph</button></form>` : "");
 }
+$("#decisions").addEventListener("click", async e => {
+  const b = e.target.closest("[data-scen]"); if (!b) return;
+  b.disabled = true; b.textContent = b.dataset.rollback ? "Rolling back…" : "Deploying…";
+  try {
+    const r = await api(`/api/scenarios/${encodeURIComponent(b.dataset.scen)}${b.dataset.rollback ? "?rollback=true" : ""}`, { method: "POST" });
+    await loadDecisions();
+    $("#deployout").innerHTML = `<div class="card small">Loaded ${esc(r.lockfile)} into ${esc(r.service)} (${r.installs} installs) in ${r.seconds}s. ` +
+      (r.drift.length ? r.drift.map(x => `<div class="warn-t">${esc(x.decision)} (${esc(x.verdict)} by ${esc(x.made_by)}) on ${esc(x.vulnerability)} is now stale: ${esc(x.new_paths.join("; "))}</div>`).join("") : "") +
+      (r.recovered.length ? r.recovered.map(x => `<div class="ok-t">${esc(x.decision)} (${esc(x.verdict)}) on ${esc(x.vulnerability)} matches the graph again.</div>`).join("") : "") +
+      (!r.drift.length && !r.recovered.length ? `<span class="ok-t">No decision changed.</span>` : "") + `</div>`;
+  } catch (err) { $("#deployout").innerHTML = `<div class="card small warn-t">${esc(err.message)}</div>`; }
+});
 $("#decisions").addEventListener("click", async e => {
   if (e.target.id !== "drift") return;
   const r = await api("/api/drift", { method: "POST" });

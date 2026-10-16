@@ -5,6 +5,7 @@ Run: uv run uvicorn blast_radius.web:app --reload
 import asyncio
 import json
 import os
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -18,6 +19,7 @@ from pydantic import BaseModel
 
 from blast_radius import analysis, config, memory
 from blast_radius.agent import agent_available
+from blast_radius.ingest.load import DATA, redeploy
 from blast_radius.mcp_server import draft_issue
 
 STATIC = Path(__file__).parent / "static"
@@ -56,11 +58,26 @@ def index():
 def overview(include_dev: bool = False):
     return {
         "stats": analysis._rows("graph_stats"),
-        "top": analysis._rows("top_advisories", include_dev=include_dev, limit=12),
+        "top": analysis.risk_board(limit=12, include_dev=include_dev),
         "agent_available": agent_available(),
         "issues_enabled": bool(os.getenv("GITHUB_TOKEN")),
         "issue_repo": ISSUE_REPO,
     }
+
+
+@app.get("/api/risk_board")
+def risk_board(limit: int = 10, include_dev: bool = False):
+    return analysis.risk_board(min(limit, 50), include_dev)
+
+
+estate_cache: dict = {}  # the estate plan only changes when a deploy changes the graph
+
+
+@app.get("/api/estate_plan")
+def estate_plan(include_dev: bool = False):
+    if include_dev not in estate_cache:
+        estate_cache[include_dev] = analysis.estate_plan(include_dev=include_dev)
+    return estate_cache[include_dev]
 
 
 @app.get("/api/search")
@@ -126,6 +143,19 @@ def record(d: DecisionIn):
         raise HTTPException(400, str(e))
 
 
+class NotAffectedIn(BaseModel):
+    person: str
+
+
+@app.post("/api/advisory/{vuln_id}/not_affected")
+def not_affected(vuln_id: str, body: NotAffectedIn):
+    """Record the proof of safety as not_affected decisions (button on the "No path found" card)."""
+    try:
+        return memory.record_not_affected(vuln_id, body.person)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/decisions")
 def decisions():
     return [{k: v for k, v in d.items() if k != "signatures"} for d in analysis._rows("current_decisions")]
@@ -134,6 +164,33 @@ def decisions():
 @app.post("/api/drift")
 def drift():
     return memory.check_drift()
+
+
+SCENARIOS = {s["id"]: s for s in json.loads((DATA / "scenarios/scenarios.json").read_text())}
+deploy_lock = threading.Lock()  # one simulated deploy at a time
+
+
+@app.get("/api/scenarios")
+def scenarios():
+    """Simulated deploys (F6), and which one each service is running now."""
+    live = {r["repo"]: r["lockfile"] for r in analysis._rows("repo_lockfiles")}
+    return [{**s, "active": live.get(s["service"]) == s["lockfile"]} for s in SCENARIOS.values()]
+
+
+@app.post("/api/scenarios/{scenario_id}")
+def simulate_deploy(scenario_id: str, rollback: bool = False):
+    """Swap one service's lockfile in place (or roll it back) and report which decisions drifted."""
+    s = SCENARIOS.get(scenario_id)
+    if not s:
+        raise HTTPException(404, f"unknown scenario {scenario_id}")
+    lock = DATA / "lockfiles" / f"{s['service']}.json.gz" if rollback else DATA / "scenarios" / s["lockfile"]
+    if not deploy_lock.acquire(timeout=60):
+        raise HTTPException(409, "another deploy is running")
+    try:
+        estate_cache.clear()
+        return redeploy(s["service"], lock)
+    finally:
+        deploy_lock.release()
 
 
 class IssueIn(BaseModel):
