@@ -151,6 +151,24 @@ def import_memory(decisions: list[dict]) -> int:
     return restored
 
 
+def export_history() -> list[dict]:
+    try:
+        return _rows("session_history")
+    except Exception:
+        return []  # graph does not exist yet
+
+
+def import_history(turns: list[dict]) -> int:
+    """Write sessions and questions back after a rebuild, re-linking each to the nodes it cited.
+    A cited advisory or service missing from the new graph is dropped; the question is kept."""
+    g = graph()
+    for t in turns:
+        g.query(cypher("log_turn"), {"session": t["session"], "question": t["question"], "answer": t["answer"],
+                                     "tools": t["tools"] or [], "vulns": t["vulns"], "services": t["services"],
+                                     "at": t["at"]})
+    return len(turns)
+
+
 # ------------------------------------------------ episodic memory: what was asked and what it cited
 
 def log_turn(session_id: str, question: str, answer: str, tool_calls: list[dict]) -> None:

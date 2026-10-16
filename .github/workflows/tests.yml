@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      falkordb:
+        image: falkordb/falkordb:latest   # same image as docker-compose.yml
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      FALKORDB_HOST: localhost
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - name: Build the demo graph from the committed data
+        run: uv run python -m blast_radius.ingest.load
+      - name: Run the tests (a skipped test fails the job, since it means the graph was missing)
+        run: |
+          set -o pipefail
+          uv run pytest -rs 2>&1 | tee pytest.log
+          ! grep -qE "[0-9]+ skipped" pytest.log
