@@ -29,7 +29,8 @@ npm dependency trees, known advisories, customers, and past triage decisions.
 
 How to work:
 - For any question needing more than one tool, first call update_plan with 3-6 short steps, then keep it
-  current (mark steps in_progress / done) as you go.
+  current as you go: include an update_plan call in the same response as the tool calls for each step,
+  marking finished steps done and the next one in_progress.
 - Resolve any advisory the user mentions with find_vulnerability before other tools.
 - For "what should we look at first?" style questions, use risk_board; for one fix across many
   advisories, use estate_plan.
@@ -70,6 +71,7 @@ class Agent:
         self._stack = AsyncExitStack()
         self._session: ClientSession | None = None
         self._emit = None  # set per run: where tool events go
+        self._plan: list[dict] = []  # the agent's current plan, as last shown to the user
 
     async def __aenter__(self):
         # The MCP client's anyio scopes must be opened and closed in the same task, but a web server
@@ -105,6 +107,7 @@ class Agent:
     async def call(self, name: str, args: dict, call_id: str | None = None) -> dict:
         """Call one MCP tool, streaming its start, the queries it ran, and its result."""
         call_id = call_id or f"t-{uuid.uuid4().hex[:6]}"
+        await self._advance_plan()
         await self._emit({"type": "tool_start", "id": call_id, "tool": name, "input": args})
         started = time.perf_counter()
         res = await self._session.call_tool(name=name, arguments=args)
@@ -132,12 +135,36 @@ class Agent:
             tools.append(beta_async_tool(run, name=t.name, description=t.description, input_schema=schema))
 
         async def update_plan(steps: list[dict]) -> str:
-            await self._emit({"type": "plan", "steps": steps})
+            await self._set_plan(steps)
             return "plan updated"
 
         tools.append(beta_async_tool(update_plan, name="update_plan", input_schema=PLAN_SCHEMA,
                                      description="Show the user your step-by-step plan and its progress."))
         return tools
+
+    # ------------------------------------------------------------- plan
+
+    # The model often writes its plan once and never marks progress, which left the panel at 0/N
+    # after the answer was in (D-045). So the server keeps the plan moving on its own.
+
+    async def _set_plan(self, steps: list[dict]):
+        self._plan = [{"title": s.get("title", ""), "status": s.get("status", "pending")} for s in steps]
+        await self._emit({"type": "plan", "steps": [dict(p) for p in self._plan]})
+
+    async def _advance_plan(self):
+        """A tool is starting: if no step is in progress, the next pending one is."""
+        if self._plan and not any(p["status"] == "in_progress" for p in self._plan):
+            nxt = next((p for p in self._plan if p["status"] == "pending"), None)
+            if nxt:
+                nxt["status"] = "in_progress"
+                await self._emit({"type": "plan", "steps": [dict(p) for p in self._plan]})
+
+    async def _finish_plan(self):
+        """The answer is in, so every step of the plan is done."""
+        if any(p["status"] != "done" for p in self._plan):
+            for p in self._plan:
+                p["status"] = "done"
+            await self._emit({"type": "plan", "steps": [dict(p) for p in self._plan]})
 
     # ------------------------------------------------------------- runs
 
@@ -145,6 +172,7 @@ class Agent:
                      ) -> AsyncIterator[dict]:
         queue: asyncio.Queue = asyncio.Queue()
         self._emit = queue.put
+        self._plan = []  # each turn makes its own plan
 
         async def drive():
             try:
@@ -197,6 +225,7 @@ class Agent:
                               "refused": True})
             return
         answer = "".join(b.text for b in last.content if b.type == "text").strip() if last else ""
+        await self._finish_plan()
         log_turn(self.session_id, question, answer, calls)
         await self._emit({"type": "done", "answer": answer, "refused": False})
 
