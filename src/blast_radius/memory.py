@@ -72,9 +72,35 @@ def record_not_affected(vuln_id: str, person: str) -> dict:
             "reason": reason}
 
 
+def exposure_change(vuln_id: str, service: str, recorded: list[str] | None) -> dict:
+    """Has the exposure a decision was made against changed? Compares the chains stored with the
+    decision to the ones the graph gives today (D-047)."""
+    then, now = set(recorded or []), set(_signatures(vuln_id, service))
+    chain = lambda sig: " → ".join(json.loads(sig)[1])
+    new, gone = sorted(chain(x) for x in now - then), sorted(chain(x) for x in then - now)
+    if not new and not gone:
+        summary = f"unchanged: the same {len(now)} exposure path(s) as when decided"
+    else:
+        summary = ", ".join(x for x in (f"{len(new)} new path(s)" if new else "",
+                                        f"{len(gone)} path(s) gone" if gone else "") if x) + " since the decision"
+    return {"changed": bool(new or gone), "paths_then": len(then), "paths_now": len(now),
+            "new_paths": new, "removed_paths": gone, "summary": summary}
+
+
+def _covers(rows: list[dict]) -> dict[str, list[str]]:
+    """Every service one sign-off covers: decisions with the same advisory, verdict, reason and person
+    (record_not_affected writes one per service)."""
+    groups: dict[tuple, list[str]] = {}
+    for d in _rows("current_decisions"):
+        groups.setdefault((d["vuln"], d["verdict"], d["reason"], d["person"]), []).append(d["service"])
+    return {r["decision"]: sorted(groups.get((r["about"], r["verdict"], r["reason"], r["by"]), [r["service"]]))
+            for r in rows}
+
+
 def recall_precedent(vuln_id: str) -> list[dict]:
     """Decisions on this advisory, then on the same package, then on advisories reached through the
-    same dependency chain (`match` says which, `via` names the shared packages)."""
+    same dependency chain (`match` says which, `via` names the shared packages). Each one says who
+    decided, why, when, which advisory and services it covers, and whether its exposure has changed."""
     rows = [{**r, "match": "advisory" if r["same_advisory"] else "package", "via": []}
             for r in _rows("recall_precedent", id=vuln_id)]
     via = sorted({_name(n) for r in _rows("exposure_paths", id=vuln_id, include_dev=True) for n in r["chain"] or []})
@@ -82,6 +108,11 @@ def recall_precedent(vuln_id: str) -> list[dict]:
     if via:
         rows += [{**r, "match": "path", "package": None} for r in _rows("path_precedent", id=vuln_id, via=via)
                  if r["decision"] not in seen]
+    covers = _covers(rows) if rows else {}
+    for r in rows:
+        r["covers"] = {"advisory": r["about"], "severity": r["severity"], "summary": r["summary"],
+                       "services": covers[r["decision"]]}
+        r["exposure"] = exposure_change(r["about"], r["service"], r.pop("signatures"))
     return rows
 
 
@@ -110,7 +141,7 @@ def check_recovered() -> list[dict]:
     back = []
     for d in _rows("current_decisions"):
         if d["status"] == "stale" and set(_signatures(d["vuln"], d["service"])) <= set(d["signatures"] or []):
-            graph().query("MATCH (d:Decision {id: $id}) SET d.status = 'current', d.stale_reason = null",
+            graph().query("MATCH (d:Decision {id: $id}) SET d.status = 'current', d.stale_reason = null, d.stale_at = null",
                           {"id": d["id"]})
             back.append({"decision": d["id"], "vulnerability": d["vuln"], "service": d["service"],
                          "verdict": d["verdict"]})
@@ -124,6 +155,62 @@ def backfill_via() -> int:
         graph().query("MATCH (d:Decision {id: $id}), (p:Package) WHERE p.name IN $via CREATE (d)-[:VIA]->(p)",
                       {"id": decision_id, "via": _via(sigs or [])})
     return len(rows)
+
+
+# ------------------------------------------------ what changed since the last investigation (D-050)
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def what_changed(vuln_id: str, record: bool = True) -> dict:
+    """Compare this advisory's production exposure with the snapshot taken the last time anyone
+    investigated it: services newly exposed or no longer exposed, paths added or removed, chains whose
+    versions changed, lockfiles swapped, and decisions that went stale in between. Then save today's
+    exposure as the new snapshot."""
+    now = {(r["service"], r["path"]): r["chain"] for r in _rows("advisory_signatures", id=vuln_id)}
+    lockfiles = {r["repo"]: r["lockfile"] for r in _rows("repo_lockfiles")}
+    last = _rows("investigations", id=vuln_id)
+    out = {"vulnerability": vuln_id, "first_look": not last, "last_look": None,
+           "services_now": sorted({s for s, _ in now}), "paths_now": len(now)}
+    if last:
+        last = last[0]
+        then = {(s, p): c for s, p, c in (json.loads(x) for x in last["signatures"] or [])}
+        old_locks = json.loads(last["lockfiles"] or "{}")
+        chain = lambda svc, c: " → ".join([svc, *c])
+        before, after = {s for s, _ in then}, {s for s, _ in now}
+        changed = sorted(k for k in then.keys() & now.keys() if then[k] != now[k])
+        stale = [d for d in _rows("current_decisions")
+                 if d["vuln"] == vuln_id and d["status"] == "stale" and (d.get("stale_at") or "") >= last["at"]]
+        out.update({
+            "last_look": last["at"],
+            "newly_exposed_services": sorted(after - before),
+            "no_longer_exposed_services": sorted(before - after),
+            "new_paths": sorted(chain(k[0], now[k]) for k in now.keys() - then.keys()),
+            "removed_paths": sorted(chain(k[0], then[k]) for k in then.keys() - now.keys()),
+            "changed_versions": [{"service": k[0], "install_path": k[1], "before": " → ".join(then[k]),
+                                  "after": " → ".join(now[k])} for k in changed],
+            "lockfiles_changed": [{"service": svc, "before": old_locks.get(svc), "after": f}
+                                  for svc, f in sorted(lockfiles.items()) if svc in old_locks and old_locks[svc] != f],
+            "decisions_gone_stale": [{"decision": d["id"], "service": d["service"], "verdict": d["verdict"],
+                                      "made_by": d["person"], "stale_at": d["stale_at"], "why": d["stale_reason"]}
+                                     for d in stale],
+        })
+        out["changed"] = any(out[k] for k in ("newly_exposed_services", "no_longer_exposed_services", "new_paths",
+                                              "removed_paths", "changed_versions", "lockfiles_changed",
+                                              "decisions_gone_stale"))
+    if record:
+        _save_investigation(vuln_id, _now(), sorted(json.dumps([s, p, c]) for (s, p), c in now.items()),
+                            json.dumps(lockfiles, sort_keys=True))
+    return out
+
+
+def _save_investigation(vuln_id: str, at: str, signatures: list[str], lockfiles: str) -> None:
+    params = {"id": vuln_id, "at": at, "signatures": signatures, "lockfiles": lockfiles}
+    started = time.perf_counter()
+    res = graph().query(cypher("save_investigation"), params)
+    trace("cypher", "save_investigation", cypher("save_investigation"), params,
+          (time.perf_counter() - started) * 1000, len(res.result_set))
 
 
 # ------------------------------------------------ keep memory across graph rebuilds
@@ -145,10 +232,23 @@ def import_memory(decisions: list[dict]) -> int:
                                                   "signatures": d["signatures"] or [],
                                                   "via": _via(d["signatures"] or [])})
         if res.result_set and d["status"] != "current":
-            g.query("MATCH (d:Decision {id: $id}) SET d.status = $status, d.stale_reason = $why",
-                    {"id": d["id"], "status": d["status"], "why": d["stale_reason"]})
+            g.query("MATCH (d:Decision {id: $id}) SET d.status = $status, d.stale_reason = $why, d.stale_at = $when",
+                    {"id": d["id"], "status": d["status"], "why": d["stale_reason"], "when": d.get("stale_at")})
         restored += len(res.result_set)
     return restored
+
+
+def export_investigations() -> list[dict]:
+    try:
+        return _rows("investigations", id=None)
+    except Exception:
+        return []  # graph does not exist yet
+
+
+def import_investigations(rows: list[dict]) -> int:
+    for r in rows:
+        _save_investigation(r["vuln"], r["at"], r["signatures"] or [], r["lockfiles"] or "{}")
+    return len(rows)
 
 
 def export_history() -> list[dict]:

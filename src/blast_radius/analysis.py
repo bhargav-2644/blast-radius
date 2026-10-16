@@ -62,16 +62,30 @@ def find_vulnerability(text: str, limit: int = 5) -> list[dict]:
 
 # ---------------------------------------------------------------- F1 / F4
 
+def advisory_source(vuln_id: str) -> dict:
+    """Where the advisory data came from, for citing it next to every path (D-046)."""
+    from blast_radius.ingest.osv import snapshot_date
+    return {"source": "OSV (npm)", "url": f"https://osv.dev/vulnerability/{vuln_id}", "snapshot": snapshot_date()}
+
+
 def exposure(vuln_id: str, include_dev: bool = False) -> dict:
     rows = _rows("exposure_paths", id=vuln_id, include_dev=include_dev)
     services: dict[str, dict] = {}
     for r in rows:
-        svc = services.setdefault(r["service"], {"service": r["service"], "team": r["team"], "tier": r["tier"],
-                                                 "paths": []})
+        svc = services.setdefault(r["service"], {
+            "service": r["service"], "team": r["team"], "tier": r["tier"],
+            # the lockfile every chain below was read from, and when (null = loaded before this was recorded)
+            "repo": {"source": r["repo_source"], "ref": r["repo_ref"], "url": r["repo_url"],
+                     "lockfile": r["lockfile"], "last_seen": r["loaded_at"]},
+            "paths": []})
         svc["paths"].append({"package": f"{r['package']}@{r['version']}", "depth": r["depth"],
-                             "chain": r["chain"], "dev_only": r["dev_only"], "fixed": r["fixed"]})
+                             "chain": r["chain"], "dev_only": r["dev_only"], "fixed": r["fixed"],
+                             "install_path": r["install_path"], "affected_ranges": r["affected_ranges"] or [],
+                             # the advisory range this exact version falls in, and the nearest fix above it
+                             "matched_range": next((x for x in r["affected_ranges"] or [] if _in_ranges(r["version"], [x])), None),
+                             "nearest_fix": _best_fix(r["version"], r["fixed"] or [])})
     result = {"vulnerability": vuln_id, "include_dev": include_dev, "exposed": bool(services),
-              "services": list(services.values())}
+              "advisory_source": advisory_source(vuln_id), "services": list(services.values())}
     if not services:
         result["safety_proof"] = safety_proof(vuln_id, include_dev)
     return result
@@ -125,7 +139,82 @@ def _satisfies(version: str | None, rng: str | None) -> bool:
         return False
 
 
-def _repo_cut(repo: str, targets: dict[str, dict], include_dev: bool) -> dict:
+def _in_ranges(version: str, ranges: list[str]) -> bool:
+    return any(_satisfies(version, "*" if r == "all versions" else r) for r in ranges or [])
+
+
+def _still_affected(name: str, version: str, advisories: list[dict]) -> list[str]:
+    return sorted(x["id"] for x in advisories if x["package"] == name and _in_ranges(version, x["ranges"]))
+
+
+def _clean_fix(name: str, fix: str | None, advisories: list[dict]) -> str | None:
+    """The advisory's own fix can still be hit by another advisory on the same package (form-data 4.0.4
+    fixes GHSA-fjxv but not GHSA-hmw2). Raise it to the smallest fixed version of any of the package's
+    advisories that clears them all, same major first; keep it as is if none does."""
+    if not fix or not _still_affected(name, fix, advisories):
+        return fix
+    base = _version(fix)
+    bounds = {r[1:].strip() for x in advisories if x["package"] == name for rng in x["ranges"] or []
+              for r in rng.split() if r.startswith("<") and not r.startswith("<=")}
+    cands = sorted(v for v in (_version(b) for b in bounds) if v and base and v > base)
+    for v in sorted(cands, key=lambda v: (v.major != base.major, v)):
+        if not _still_affected(name, str(v), advisories):
+            return str(v)
+    return fix
+
+
+def _clean_targets(targets: dict[str, dict]) -> list[dict]:
+    """Make each target's fix clean against every known advisory on its package; returns those advisories."""
+    advisories = _rows("package_advisories", names=sorted({t["name"] for t in targets.values()}))
+    for t in targets.values():
+        fix = _clean_fix(t["name"], t["fix"], advisories)
+        if fix != t["fix"]:
+            t["raised_from"], t["fix"] = t["fix"], fix
+    return advisories
+
+
+def _verify(a: dict, target: dict | None, advisories: list[dict]) -> dict:
+    """Check one proposed change against what the graph knows, and say plainly what it could not check
+    (D-048). A min cut is the cheapest set of links to change; it does not by itself prove that a
+    version exists, is clean, or fits the declared ranges."""
+    name = a["child"].rsplit("@", 1)[0]
+    fix = a["fix"]
+    if not fix or target is None:
+        needs = name if a["kind"] == "bump_direct" else a["parent"].rsplit("@", 1)[0]
+        checks = [{"check": "target version", "ok": None,
+                   "detail": f"No specific version: needs a release of {needs} that no longer pulls in "
+                             "the vulnerable package, and the npm registry was not queried for one"}]
+        return {"status": "unverified", "checks": checks}
+    checks = [{"check": "fix published", "ok": True,
+               "detail": f"{name}@{fix} is a fixed version listed in the OSV advisory (npm registry not queried)"}]
+    still = _still_affected(name, fix, advisories)
+    known = sum(1 for x in advisories if x["package"] == name)
+    detail = (f"{name}@{fix} is still affected by {', '.join(still)}" if still
+              else f"{name}@{fix} is outside the affected ranges of all {known} known advisories on {name}")
+    if target.get("raised_from") and not still:
+        old = target["raised_from"]
+        detail = (f"this advisory's own fix {name}@{old} is still affected by "
+                  f"{', '.join(_still_affected(name, old, advisories))}, so the plan uses {fix}, which clears all {known}")
+    checks.append({"check": "fix is clean", "ok": not still, "detail": detail})
+    if a["kind"] == "refresh":
+        checks.append({"check": "fits declared range", "ok": True,
+                       "detail": f"{a['parent']} declares {name}@{a['range']}, which allows {fix}"})
+    elif a["kind"] == "override":
+        checks.append({"check": "fits declared range", "ok": None,
+                       "detail": f"{a['parent']} declares {name}@{a['range']}, which excludes {fix}; "
+                                 "forcing it with an override is not tested for compatibility"})
+    else:  # bump_direct of the affected package itself: the service's own package.json changes
+        cur, new = _version(target["version"]), _version(fix)
+        major = bool(cur and new and new.major > cur.major)
+        checks.append({"check": "fits declared range", "ok": None if major else True,
+                       "detail": f"major upgrade {target['version']} → {fix}: breaking changes not verified" if major
+                       else f"same major version as installed {target['version']}; the service's declared range {a['range']} needs updating"})
+    oks = [c["ok"] for c in checks]
+    status = "failed" if False in oks else "verified" if all(oks) else "partial"
+    return {"status": status, "checks": checks}
+
+
+def _repo_cut(repo: str, targets: dict[str, dict], include_dev: bool, advisories: list[dict]) -> dict:
     edges = _rows("repo_requires_subgraph", repo=repo)
     parents = defaultdict(list)
     for e in edges:
@@ -177,6 +266,8 @@ def _repo_cut(repo: str, targets: dict[str, dict], include_dev: bool) -> dict:
             kind = "upstream"
         actions.append({"kind": kind, "effort": e["capacity"], "parent": parent, "child": child,
                         "range": e["range"], "fix": fix, "action": text})
+    for a, e in zip(actions, cut):
+        a["verification"] = _verify(a, targets.get(e["dst"]), advisories)
     return {"repo": repo, "total_effort": max_flow, "solver": solver, "exposure_paths": _count_paths(out_edges, targets),
             "vulnerable_links": sum(len(in_edges[t]) for t in targets),
             "affected_installs": len(targets), "subgraph_edges": len(sub), "actions": actions}
@@ -285,8 +376,11 @@ def upgrade_plan(vuln_id: str, include_dev: bool = False) -> dict:
     for r in _rows("affected_installs", id=vuln_id, include_dev=include_dev):
         by_repo[r["repo"]][r["key"]] = {"name": r["name"], "version": r["version"],
                                         "fix": _best_fix(r["version"], r["fixed"] or [])}
-    plans = [_repo_cut(repo, targets, include_dev) for repo, targets in sorted(by_repo.items())]
+    advisories = _clean_targets({k: t for targets in by_repo.values() for k, t in targets.items()}) if by_repo else []
+    plans = [_repo_cut(repo, targets, include_dev, advisories) for repo, targets in sorted(by_repo.items())]
+    statuses = [a["verification"]["status"] for p in plans for a in p["actions"]]
     return {"vulnerability": vuln_id, "include_dev": include_dev,
+            "verification": {k: statuses.count(k) for k in ("verified", "partial", "unverified", "failed")},
             "effort_scale": {"refresh": EFFORT_REFRESH, "bump_direct": EFFORT_DIRECT,
                              "override": EFFORT_OVERRIDE, "upstream": EFFORT_TRANSITIVE},
             "services": plans,
@@ -312,13 +406,14 @@ def estate_plan(severities: tuple[str, ...] = ("CRITICAL", "HIGH"), include_dev:
     for (repo, key), fs in fixes.items():
         # one version that fixes every advisory on this install, if each advisory has a fix
         by_repo[repo][key]["fix"] = None if None in fs else max(fs, key=_version)
+    advisories = _clean_targets({k: t for targets in by_repo.values() for k, t in targets.items()}) if by_repo else []
 
     # baseline: triaging one advisory at a time means one remediation per advisory per service
     one_by_one = len({(repo, v) for (repo, _), vs in vulns_at.items() for v in vs})
     changes: dict[tuple, dict] = {}
     plans = []
     for repo, targets in sorted(by_repo.items()):
-        plan = _repo_cut(repo, targets, include_dev)
+        plan = _repo_cut(repo, targets, include_dev, advisories)
         edges = _rows("repo_requires_subgraph", repo=repo)
         down = defaultdict(list)
         for e in edges:
@@ -334,7 +429,7 @@ def estate_plan(severities: tuple[str, ...] = ("CRITICAL", "HIGH"), include_dev:
                         seen.add(n); queue.append(n)
             closes = sorted({v for t in seen if t in targets for v in vulns_at[(repo, t)]})
             key = (a["kind"], a["parent"] if a["parent"] != repo else "", a["child"], a["fix"])
-            c = changes.setdefault(key, {**{k: a[k] for k in ("kind", "effort", "child", "fix", "range")},
+            c = changes.setdefault(key, {**{k: a[k] for k in ("kind", "effort", "child", "fix", "range", "verification")},
                                          "parent": a["parent"] if a["parent"] != repo else None,
                                          "action": a["action"].replace(repo, "the service") if a["parent"] == repo else a["action"],
                                          "services": [], "advisories": set()})
@@ -357,9 +452,42 @@ def estate_plan(severities: tuple[str, ...] = ("CRITICAL", "HIGH"), include_dev:
 
 # ---------------------------------------------------------------- F8
 
+def _breakdown(r: dict) -> dict:
+    """Why an advisory ranks where it does: the factors in the score, then the context a person
+    weighs next to it, each labelled with whether it is in the score (D-049)."""
+    sev, cw, svc = r["severity_weight"], r["customer_weight"], r["services"]
+    r["breakdown"] = {
+        "formula": f"{sev} severity × ({cw} customer weight + {svc} services) = {r['score']}",
+        "factors": [
+            {"factor": "Severity", "value": r["severity"], "points": f"×{sev}", "in_score": True,
+             "note": "CRITICAL 4, HIGH 3, MODERATE 2, LOW 1"},
+            {"factor": "Customers reached", "in_score": True, "points": f"+{cw}",
+             "value": f"{r['customers']} ({r['enterprise']} enterprise, {r['business']} business, {r['startup']} startup)",
+             "note": "directly or through up to 3 service calls; enterprise 5, business 3, startup 1"},
+            {"factor": "Services exposed", "value": ", ".join(r["service_names"]), "points": f"+{svc}", "in_score": True},
+            {"factor": "Critical services", "in_score": False,
+             "value": f"{len(r['critical_services'])} of {svc}" + (f" ({', '.join(r['critical_services'])})" if r["critical_services"] else "")},
+            {"factor": "Exposure", "in_score": False,
+             "value": f"{r['installs']} affected install(s), {r['direct']} of them direct dependencies"},
+            {"factor": "Reachability", "in_score": False, "value": "dependency chain only",
+             "note": "unverified: whether the vulnerable code is called was not analysed"},
+            {"factor": "Fix available", "in_score": False,
+             "value": f"OSV lists a fixed version for {r['with_fix']} of {r['installs']} affected install(s)",
+             "note": "the upgrade plan checks each fix against other advisories and declared ranges"},
+        ]}
+    return r
+
+
 def risk_board(limit: int = 10, include_dev: bool = False) -> list[dict]:
     """Advisories reaching production, ranked by business impact, those still needing a decision first."""
-    return _rows("risk_board", include_dev=include_dev, limit=limit)
+    return [_breakdown(r) for r in _rows("risk_board", id=None, include_dev=include_dev, limit=limit)]
+
+
+def risk_breakdown(vuln_id: str, include_dev: bool = False) -> dict:
+    """One advisory's risk score with every factor behind it, or why it has none."""
+    rows = _rows("risk_board", id=vuln_id, include_dev=include_dev, limit=1)
+    return _breakdown(rows[0]) if rows else {"id": vuln_id, "score": 0,
+                                             "breakdown": None, "reason": "no production exposure"}
 
 
 def chokepoints(limit: int = 10) -> list[dict]:

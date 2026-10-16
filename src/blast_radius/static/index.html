@@ -169,6 +169,13 @@ pre.code { margin: 0; background: var(--code-bg); color: var(--code-ink); paddin
 .stats div { background: var(--sunk); border-radius: 8px; padding: 6px 9px; font-size: 11.5px; color: var(--muted); }
 .stats b { display: block; font-size: 18px; color: var(--ink); }
 .ok-t { color: var(--ok); } .warn-t { color: var(--warn); }
+.evd { font-size: 11px; color: var(--faint); margin: 1px 0 4px 12px; word-break: break-word; } .evd a { color: inherit; }
+.vb { font-size: 10px; font-weight: 700; padding: 0 6px; border-radius: 99px; background: var(--sunk); color: var(--muted); margin-left: 4px; white-space: nowrap; }
+.vb.verified { color: var(--ok); } .vb.partial { color: var(--warn); } .vb.failed { color: var(--danger); background: var(--danger-soft); }
+.checks { margin: 2px 0 4px; padding-left: 14px; list-style: none; color: var(--muted); font-size: 11px; }
+.bk { width: 100%; border-collapse: collapse; font-size: 11.5px; margin-top: 4px; } .bk td { padding: 2px 6px 2px 0; vertical-align: top; border-top: 1px solid var(--line); }
+.bk td:last-child { text-align: right; white-space: nowrap; font-family: var(--mono); } .bk tr.ctx td { color: var(--muted); }
+.why { border-top: 1px dashed var(--line); padding: 2px 14px 6px 98px; font-size: 11.5px; } .why summary { cursor: pointer; color: var(--muted); }
 .btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 4px 10px; font-size: 12px; font-weight: 500; color: var(--accent); }
 .btn:hover { border-color: var(--accent); }
 .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
@@ -246,7 +253,7 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = n => Number(n || 0).toLocaleString();
 const ICON = { find_vulnerability: "🔎", find_exposure: "🧬", customer_impact: "👥", upgrade_plan: "✂️", chokepoints: "📍", risk_board: "📊", estate_plan: "🧯",
-  record_decision: "📝", recall_precedent: "🧠", check_drift: "↻", draft_issue: "🎫", update_plan: "☑️" };
+  record_decision: "📝", recall_precedent: "🧠", check_drift: "↻", draft_issue: "🎫", update_plan: "☑️", risk_breakdown: "⚖️", what_changed: "🕘" };
 const EXAMPLES = [
   ["Are we affected by CVE-2025-7783?", "Critical form-data advisory, three services deep"],
   ["Who is impacted by GHSA-9wv6-86v2-598j and what's the smallest fix?", "path-to-regexp across five services"],
@@ -377,7 +384,14 @@ async function renderBoard() {
       <span><span class="id">${esc(r.id)}</span><span class="sum">${esc(r.summary)}</span></span>
       <span class="num"><b>${r.services}</b> service${r.services > 1 ? "s" : ""}</span>
       <span class="num"><b>${r.customers}</b> customers${r.enterprise ? ` · ${r.enterprise} ent.` : ""}</span>
-      <span class="tri ${esc(r.triage.split(" ")[0])}">${esc(r.triage)}</span></button>`).join("");
+      <span class="tri ${esc(r.triage.split(" ")[0])}">${esc(r.triage)}</span></button>
+      <details class="why"><summary>Why this rank: score ${r.score}</summary>${breakdownHtml(r.breakdown)}</details>`).join("");
+}
+// The factors behind a risk score (D-049): scored ones carry their points, context rows are labelled as not scored
+function breakdownHtml(b) {
+  if (!b) return `<div class="small muted">No production exposure, so no score.</div>`;
+  return `<div class="small mono" style="margin-top:4px">${esc(b.formula)}</div><table class="bk">` + b.factors.map(f =>
+    `<tr class="${f.in_score ? "" : "ctx"}"><td><b>${esc(f.factor)}</b>${f.note ? `<div class="muted">${esc(f.note)}</div>` : ""}</td><td>${esc(f.value)}</td><td>${f.in_score ? esc(f.points) : "context"}</td></tr>`).join("") + `</table>`;
 }
 $("#feed").addEventListener("click", async e => {
   if (e.target.id !== "estate") return;
@@ -390,7 +404,7 @@ function estateCard(r) {
   return `<div style="padding:10px 14px;border-bottom:1px solid var(--line)">
     <div class="stats" style="grid-template-columns:repeat(4,1fr)"><div><b>${r.advisories}</b>advisories</div><div><b>${r.total_changes}</b>changes together</div><div><b>${r.one_by_one_fixes}</b>fixes one by one</div><div><b>${r.services.length}</b>services</div></div>
     <div class="small muted" style="margin:6px 0">${Object.entries(r.by_severity).map(([k, v]) => `${v} ${k.toLowerCase()}`).join(", ")}, in production. One min cut per service removes every path to all of them; the changes that address the most advisories come first.</div>
-    ${r.changes.slice(0, 8).map(c => `<div class="small" style="margin-top:6px"><b>${c.advisories.length} advisories</b> · ${esc(c.action)} <span class="muted">in ${esc(c.services.join(", "))}</span></div>`).join("")}
+    ${r.changes.slice(0, 8).map(c => `<div class="small" style="margin-top:6px"><b>${c.advisories.length} advisories</b> · ${esc(c.action)}${c.verification ? `<span class="vb ${esc(c.verification.status)}" title="${esc(c.verification.checks.map(k => k.detail).join("\n"))}">${esc(c.verification.status)}</span>` : ""} <span class="muted">in ${esc(c.services.join(", "))}</span></div>`).join("")}
     ${r.changes.length > 8 ? `<div class="small muted" style="margin-top:6px">+${r.changes.length - 8} smaller changes</div>` : ""}</div>`;
 }
 $("#feed").addEventListener("click", e => {
@@ -419,12 +433,14 @@ function summarize(tool, input, r) {
     case "find_vulnerability": return Array.isArray(r) ? (r.length ? `${r[0].id} · ${r[0].severity}` + (r.length > 1 ? ` (+${r.length - 1})` : "") : "no match") : "";
     case "find_exposure": return r.exposed ? `${r.services.length} services exposed` : "no path: safe in production";
     case "customer_impact": return `${r.customers.length} customers · ${r.by_tier?.enterprise ?? 0} enterprise`;
-    case "upgrade_plan": return `${r.total_actions} changes remove ${fmt(r.exposure_paths)} chains`;
+    case "upgrade_plan": return `${r.total_actions} changes remove ${fmt(r.exposure_paths)} chains · ${r.verification?.verified ?? 0} verified`;
     case "recall_precedent": return r.length ? `${r.length} past decision${r.length > 1 ? "s" : ""}` : "no precedent";
     case "check_drift": return r.length ? `${r.length} decision(s) stale` : "all decisions current";
     case "chokepoints": return `${r.length} packages`;
     case "estate_plan": return `${r.total_changes} changes for ${r.advisories} advisories`;
     case "risk_board": return `${r.filter(x => x.triage !== "triaged").length} need a decision`;
+    case "risk_breakdown": return r.breakdown ? `score ${r.score}` : "no production exposure";
+    case "what_changed": return r.first_look ? "first look: baseline saved" : r.changed ? "changed since last look" : "no change since last look";
     case "record_decision": return `saved ${r.id || ""}`;
     case "draft_issue": return r.title || "";
   }
@@ -538,10 +554,28 @@ function addFinding(html) {
   const box = $("#findings"); if (!T.findings) box.innerHTML = "";
   T.findings++; const d = document.createElement("div"); d.innerHTML = html; box.prepend(d.firstElementChild);
 }
+// Recalled decisions, explained (D-047): who, when, why, what it covers, and whether its exposure moved since
 function precedentCards(r, src) {
   return r.map(x => `<div class="card"><h4><span class="sev ${x.status === "stale" ? "MODERATE" : ""}">${esc(x.status)}</span>${esc(x.verdict)} · ${esc(x.service)}<span class="src">${src}</span></h4>
-    <div class="small">${esc(x.reason)}</div><div class="small muted">${esc(x.by)}, ${esc((x.at || "").slice(0, 10))} · ${x.match === "path" ? `${esc(x.about)}, through the same ${esc(x.via.join(", "))}` : x.same_advisory ? "this advisory" : "same package " + esc(x.package)}</div>
-    ${x.stale_reason ? `<div class="small warn-t">${esc(x.stale_reason)}</div>` : ""}</div>`).join("");
+    <div class="small">“${esc(x.reason)}”</div>
+    <div class="small muted">Decided by <b>${esc(x.by)}</b> on ${esc((x.at || "").slice(0, 16).replace("T", " "))} UTC · matched on ${x.match === "path" ? `the same path through ${esc(x.via.join(", "))}` : x.same_advisory ? "this advisory" : "the same package " + esc(x.package)}</div>
+    ${x.covers ? `<div class="small muted">Covers <code>${esc(x.covers.advisory)}</code> (${esc(x.covers.severity)}) for ${esc(x.covers.services.join(", "))}</div>` : ""}
+    ${x.exposure ? `<div class="small ${x.exposure.changed ? "warn-t" : "ok-t"}">Exposure now: ${esc(x.exposure.summary)}</div>` +
+      [...x.exposure.new_paths.map(p => `+ ${x.service} → ${p}`), ...x.exposure.removed_paths.map(p => `− ${x.service} → ${p}`)].slice(0, 4).map(p => `<div class="chain">${esc(p)}</div>`).join("") : ""}
+    ${x.stale_reason && !x.exposure ? `<div class="small warn-t">${esc(x.stale_reason)}</div>` : ""}</div>`).join("");
+}
+function changesCard(r, src) {
+  const when = t => esc((t || "").slice(0, 16).replace("T", " ")) + " UTC";
+  if (r.first_look) return `<div class="card"><h4>What changed<span class="src">${src}</span></h4><div class="small muted">First investigation of this advisory. Today's exposure (${r.paths_now} production paths in ${r.services_now.length} services) is saved, so the next look shows what changed.</div></div>`;
+  const rows = [
+    ...r.newly_exposed_services.map(x => `<div class="small warn-t">Newly exposed: <b>${esc(x)}</b></div>`),
+    ...r.no_longer_exposed_services.map(x => `<div class="small ok-t">No longer exposed: <b>${esc(x)}</b></div>`),
+    ...r.new_paths.map(x => `<div class="chain warn-t">+ ${esc(x)}</div>`),
+    ...r.removed_paths.map(x => `<div class="chain ok-t">− ${esc(x)}</div>`),
+    ...r.changed_versions.map(x => `<div class="chain">${esc(x.service)}: ${esc(x.before)} → now ${esc(x.after)}</div>`),
+    ...r.lockfiles_changed.map(x => `<div class="small">${esc(x.service)} lockfile: <code>${esc(x.before)}</code> → <code>${esc(x.after)}</code></div>`),
+    ...r.decisions_gone_stale.map(x => `<div class="small warn-t">Decision ${esc(x.decision)} (${esc(x.verdict)} by ${esc(x.made_by)}) on ${esc(x.service)} went stale: ${esc(x.why || "")}</div>`)];
+  return `<div class="card"><h4>What changed since ${when(r.last_look)}<span class="src">${src}</span></h4>${rows.length ? rows.join("") : `<div class="small ok-t">Nothing: same ${r.paths_now} production paths, no lockfile swaps, no decisions gone stale.</div>`}</div>`;
 }
 function finding(ev) {
   const r = ev.result, src = ev.tool; if (!r || r.error) return;
@@ -551,6 +585,10 @@ function finding(ev) {
       <div class="small">${esc(a.summary)}</div><div class="small muted">${esc((a.aliases || []).join(", "))}</div></div>`);
   } else if (src === "recall_precedent" && r.length) {
     addFinding(`<div>${precedentCards(r, src)}</div>`);
+  } else if (src === "what_changed") {
+    addFinding(changesCard(r, src));
+  } else if (src === "risk_breakdown" && r.breakdown) {
+    addFinding(`<div class="card"><h4>Why this is urgent · score ${r.score}<span class="src">${src}</span></h4>${breakdownHtml(r.breakdown)}</div>`);
   } else if (src === "find_exposure") {
     T.vuln = ev.input.vulnerability_id;
     if (!r.exposed) {
@@ -560,9 +598,13 @@ function finding(ev) {
         (sp.dev_only_exposure.length ? `<div class="small muted">Dev tooling only: ${esc(sp.dev_only_exposure.join(", "))}</div>` : "") +
         (sp.packages.some(pk => pk.installed.length) ? `<form class="naform" data-vuln="${esc(r.vulnerability)}" style="display:flex;gap:6px;margin-top:8px"><input name="person" placeholder="who signs off" required style="flex:1"><button class="btn">Record as not affected</button></form><div class="small naout"></div>` : "") + `</div>`);
     } else {
-      addFinding(`<div class="card"><h4>Exposure · ${r.services.length} services<span class="src">${src}</span></h4>` + r.services.map(s =>
+      const as = r.advisory_source || {};
+      addFinding(`<div class="card"><h4>Exposure · ${r.services.length} services<span class="src">${src}</span></h4>` +
+        `<div class="small muted">Advisory from <a href="${esc(as.url)}" target="_blank" rel="noopener">${esc(as.source)}</a>, snapshot ${esc(as.snapshot)}. Each chain is read from the service's lockfile in the graph.</div>` + r.services.map(s =>
         `<div style="margin-top:6px"><b class="small">${esc(s.service)}</b> <span class="small muted">${esc(s.tier)} · ${esc(s.team)}</span>` +
-        s.paths.map(p => `<div class="chain">${esc(s.service)} → ${p.chain.map((x, i) => i === p.chain.length - 1 ? `<b>${esc(x)}</b>` : esc(x)).join(" → ")}</div>`).join("") +
+        (s.repo ? `<div class="evd">lockfile <code>${esc(s.repo.lockfile)}</code> from <a href="${esc(s.repo.url)}" target="_blank" rel="noopener">${esc(s.repo.source)}@${esc(s.repo.ref)}</a> · last seen ${s.repo.last_seen ? esc(s.repo.last_seen.replace("T", " ").slice(0, 16)) + " UTC" : "not recorded (unverified)"}</div>` : "") +
+        s.paths.map(p => `<div class="chain">${esc(s.service)} → ${p.chain.map((x, i) => i === p.chain.length - 1 ? `<b>${esc(x)}</b>` : esc(x)).join(" → ")}</div>` +
+          (p.install_path ? `<div class="evd">${esc(p.install_path)} · ${esc(p.package.split("@").pop())} is in affected range <code>${esc(p.matched_range || (p.affected_ranges || []).join(" | "))}</code> · ${p.nearest_fix ? `fixed in ${esc(p.nearest_fix)}` : "no fixed version published"}</div>` : "")).join("") +
         (s.more_paths ? `<div class="small muted">+${fmt(s.more_paths)} more chains</div>` : "") + `</div>`).join("") + `</div>`);
     }
   } else if (src === "customer_impact") {
@@ -572,10 +614,12 @@ function finding(ev) {
   } else if (src === "upgrade_plan") {
     addFinding(`<div class="card"><h4>Least-effort fix<span class="src">${src}</span></h4>
       <div class="stats"><div><b>${fmt(r.exposure_paths)}</b>chains</div><div><b>${r.total_actions}</b>changes</div><div><b>${r.services.length}</b>services</div></div>
-      <div class="small muted">Min cut from FalkorDB max-flow. Effort: refresh 1 · bump direct 2 · override 4 · upstream 6.</div>` +
+      <div class="small muted">Min cut from FalkorDB max-flow. Effort: refresh 1 · bump direct 2 · override 4 · upstream 6.</div>
+      ${r.verification ? `<div class="small" style="margin-top:4px">Each change checked against the advisory data and declared ranges: <span class="vb verified">${r.verification.verified} verified</span><span class="vb partial">${r.verification.partial} partial</span><span class="vb">${r.verification.unverified} unverified</span>${r.verification.failed ? `<span class="vb failed">${r.verification.failed} failed</span>` : ""}</div>` : ""}` +
       r.services.map(s => `<div style="margin-top:8px"><div style="display:flex;gap:8px;align-items:center"><b class="small">${esc(s.repo)}</b><span class="small muted">${fmt(s.exposure_paths)} chains · effort ${s.total_effort}</span>
         <button class="btn" style="margin-left:auto" data-issue="${esc(s.repo)}" data-vuln="${esc(r.vulnerability)}">Open issue…</button></div>
-        <ul class="small" style="margin:4px 0;padding-left:18px">${s.actions.map(a => `<li>${esc(a.action)}</li>`).join("")}</ul></div>`).join("") + `</div>`);
+        <ul class="small" style="margin:4px 0;padding-left:18px">${s.actions.map(a => `<li>${esc(a.action)}${a.verification ? `<span class="vb ${esc(a.verification.status)}">${esc(a.verification.status)}</span>
+          <ul class="checks">${a.verification.checks.map(c => `<li>${c.ok === true ? "✓" : c.ok === false ? "✗" : "?"} ${esc(c.detail)}</li>`).join("")}</ul>` : ""}</li>`).join("")}</ul></div>`).join("") + `</div>`);
   } else if (src === "check_drift") {
     addFinding(`<div class="card"><h4>Drift check<span class="src">${src}</span></h4>${r.length ? r.map(x => `<div class="small warn-t">${esc(x.decision)} on ${esc(x.service)} is stale: ${esc((x.new_paths || []).join("; "))}</div>`).join("") : `<div class="small ok-t">All decisions still match today's graph.</div>`}</div>`);
   } else if (src === "record_decision") {
@@ -586,7 +630,8 @@ function finding(ev) {
   } else if (src === "estate_plan") {
     addFinding(`<div class="card"><h4>Estate fix plan<span class="src">${src}</span></h4>${estateCard(r)}</div>`);
   } else if (src === "risk_board") {
-    addFinding(`<div class="card"><h4>Risk board<span class="src">${src}</span></h4>${r.map(x => `<div class="small"><span class="sev ${esc(x.severity)}">${esc(x.severity)}</span> <code>${esc(x.id)}</code> <span class="muted">${x.services} services · ${x.customers} customers (${x.enterprise} enterprise) · ${esc(x.triage)}</span></div>`).join("")}</div>`);
+    addFinding(`<div class="card"><h4>Risk board<span class="src">${src}</span></h4>${r.map(x => `<div class="small"><span class="sev ${esc(x.severity)}">${esc(x.severity)}</span> <code>${esc(x.id)}</code> <span class="muted">${x.services} services · ${x.customers} customers (${x.enterprise} enterprise) · ${esc(x.triage)}</span>
+      <details><summary class="muted">Why: score ${x.score}</summary>${breakdownHtml(x.breakdown)}</details></div>`).join("")}</div>`);
   } else if (src === "chokepoints") {
     addFinding(`<div class="card"><h4>Chokepoints<span class="src">${src}</span></h4>${r.map(x => `<div class="small"><code>${esc(x.package)}@${esc(x.version)}</code> <span class="muted">${x.services} services · ${x.advisories} advisories</span></div>`).join("")}</div>`);
   }
@@ -624,6 +669,7 @@ function groupDecisions(list) {
     const k = [d.vuln, d.verdict, d.reason, d.person, d.status, d.stale_reason].join("\u0000");
     if (!out.has(k)) out.set(k, { ...d, services: [] });
     out.get(k).services.push(d.service);
+    if (d.exposure && d.exposure.changed) out.get(k).exposure = d.exposure;  // a sign-off shows its most changed service
   }
   return [...out.values()];
 }
@@ -635,7 +681,7 @@ async function loadDecisions() {
       <div style="display:flex;gap:8px;margin-top:8px"><button class="btn primary" data-scen="${esc(s.id)}" ${s.active ? "disabled" : ""}>Deploy</button><button class="btn" data-scen="${esc(s.id)}" data-rollback="1" ${s.active ? "" : "disabled"}>Roll back</button></div>
       ${list.some(d => d.service === s.service) ? "" : `<div class="small muted" style="margin-top:6px">Tip: record a decision for ${esc(s.service)} first (e.g. on GHSA-9wv6-86v2-598j), then deploy and watch it go stale.</div>`}</div>`).join("") +
     `<div id="deployout"></div><div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><b class="small">${list.length} decisions in the graph</b><button class="btn" style="margin-left:auto" id="drift">Re-check for drift</button></div><div id="driftout"></div>` +
-    (list.length ? groupDecisions(list).map(d => `<div class="card"><h4><span class="sev ${d.status === "stale" ? "MODERATE" : ""}">${esc(d.status)}</span>${esc(d.verdict)} · ${esc(d.services.join(", "))}</h4>${d.stale_reason ? `<div class="small warn-t">${esc(d.stale_reason)}</div>` : ""}<div class="small mono">${esc(d.vuln)}</div><div class="small">${esc(d.reason)}</div><div class="small muted">${esc(d.person)} · ${esc((d.at || "").slice(0, 10))}</div></div>`).join("") : `<div class="small muted">No decisions yet. Tell the agent what you decided, and who decided it.</div>`) +
+    (list.length ? groupDecisions(list).map(d => `<div class="card"><h4><span class="sev ${d.status === "stale" ? "MODERATE" : ""}">${esc(d.status)}</span>${esc(d.verdict)} · ${esc(d.services.join(", "))}</h4>${d.stale_reason ? `<div class="small warn-t">${esc(d.stale_reason)}</div>` : ""}<div class="small mono">${esc(d.vuln)}</div><div class="small">${esc(d.reason)}</div><div class="small muted">${esc(d.person)} · ${esc((d.at || "").slice(0, 16).replace("T", " "))} UTC</div>${d.exposure && !d.stale_reason ? `<div class="small ${d.exposure.changed ? "warn-t" : "ok-t"}">Exposure now: ${esc(d.exposure.summary)}</div>` : ""}</div>`).join("") : `<div class="small muted">No decisions yet. Tell the agent what you decided, and who decided it.</div>`) +
     (T.vuln ? `<h4 class="small" style="margin:14px 0 0">Record a decision on ${esc(T.vuln)}</h4><form class="form" id="decform">
       <input name="service" placeholder="service, e.g. storefront" required><select name="verdict"><option>risk_accepted</option><option>not_affected</option><option>fix_planned</option><option>fixed</option></select>
       <input name="person" placeholder="who decided" required><textarea name="reason" rows="2" placeholder="why" required></textarea><button class="btn primary">Save to graph</button></form>` : "");

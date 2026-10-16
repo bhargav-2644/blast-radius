@@ -6,13 +6,14 @@ The load is idempotent: it drops and rebuilds the graph from the committed data 
 import gzip
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 from blast_radius import config
 from blast_radius.db import graph
 from blast_radius.ingest import lockfile, osv
-from blast_radius.memory import (check_drift, check_recovered, export_history, export_memory, import_history,
-                                 import_memory)
+from blast_radius.memory import (check_drift, check_recovered, export_history, export_investigations,
+                                 export_memory, import_history, import_investigations, import_memory)
 
 ROOT = Path(__file__).resolve().parents[3]
 DATA = ROOT / "data"
@@ -27,6 +28,10 @@ def _batched(rows: list[dict], size: int = BATCH):
 def _run(g, query: str, rows: list[dict]):
     for chunk in _batched(rows):
         g.query(query, {"rows": chunk})
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def _service_rows(service: str, lock_path: Path) -> dict:
@@ -82,6 +87,7 @@ def build(osv_zip: Path = DATA / "osv/npm-snapshot.zip", deploys: dict[str, Path
     company = json.loads((DATA / "company.json").read_text())
     memory = export_memory()  # decisions outlive rebuilds; they are re-attached and re-checked below
     history = export_history()  # so do the questions asked in chat sessions (D-029, D-044)
+    looks = export_investigations()  # and the exposure each advisory had at its last investigation (D-050)
     g = graph()
     try:
         g.delete()
@@ -139,7 +145,9 @@ def build(osv_zip: Path = DATA / "osv/npm-snapshot.zip", deploys: dict[str, Path
         root_reqs += rows["root_reqs"]
         install_reqs += rows["install_reqs"]
         lockfiles.append({"repo": svc["name"], "lockfile": rows["lockfile"]})
-    _run(g, "UNWIND $rows AS r MATCH (repo:Repo {name: r.repo}) SET repo.lockfile = r.lockfile", lockfiles)
+    # when each lockfile was read: the "last seen" time cited as evidence on every exposure path (D-046)
+    g.query("UNWIND $rows AS r MATCH (repo:Repo {name: r.repo}) SET repo.lockfile = r.lockfile, repo.loaded_at = $at",
+            {"rows": lockfiles, "at": _now()})
 
     _run(g, """UNWIND $rows AS p
                MERGE (pkg:Package {name: p.name})
@@ -175,6 +183,8 @@ def build(osv_zip: Path = DATA / "osv/npm-snapshot.zip", deploys: dict[str, Path
     restored = import_memory(memory)
     g.query("CREATE INDEX FOR (n:Session) ON (n.id)")
     questions = import_history(history)
+    g.query("CREATE INDEX FOR (n:Investigation) ON (n.vuln)")
+    investigations = import_investigations(looks)
     stale = check_drift()
 
     stats = {
@@ -189,6 +199,7 @@ def build(osv_zip: Path = DATA / "osv/npm-snapshot.zip", deploys: dict[str, Path
         "affects_edges": len(affects),
         "decisions_restored": restored,
         "questions_restored": questions,
+        "investigations_restored": investigations,
         "decisions_now_stale": [s["decision"] for s in stale],
         "seconds": round(time.time() - started, 1),
     }
@@ -240,7 +251,8 @@ def redeploy(service: str, lock_path: Path, osv_zip: Path = DATA / "osv/npm-snap
     # versions no service installs any more leave the merged package layer
     orphans = g.query("MATCH (pv:PackageVersion) WHERE NOT (pv)<-[:IS]-(:Install) "
                       "DETACH DELETE pv RETURN count(pv)").result_set[0][0]
-    g.query("MATCH (r:Repo {name: $s}) SET r.lockfile = $f", {"s": service, "f": rows["lockfile"]})
+    g.query("MATCH (r:Repo {name: $s}) SET r.lockfile = $f, r.loaded_at = $at",
+            {"s": service, "f": rows["lockfile"], "at": _now()})
     drift, recovered = check_drift(), check_recovered()
     return {"service": service, "lockfile": rows["lockfile"], "installs": len(rows["installs"]),
             "package_versions_removed": orphans, "drift": drift, "recovered": recovered, "seconds": round(time.time() - started, 1)}
