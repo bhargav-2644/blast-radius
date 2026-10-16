@@ -23,8 +23,8 @@ def _status(decision_id):
 
 
 def test_deploy_makes_a_decision_stale_and_rollback_restores_it():
-    before = _counts()
     d = memory.record_decision(PATH_TO_REGEXP, "storefront", "risk_accepted", "test", "Priya")["decision"]
+    before = _counts()  # after the decision, which may MERGE a new Person
     try:
         r = redeploy("storefront", SCENARIO)
         drifted = {x["decision"]: x for x in r["drift"]}

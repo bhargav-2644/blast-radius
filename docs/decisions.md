@@ -283,6 +283,20 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Reason:** Advisories that share a chain are cheaper to fix together than one at a time. On the demo graph, 145 critical and high advisories in production take 194 changes in one plan, against 235 advisory-by-service fixes one at a time, and the test checks that every advisory is covered. It reuses the F3 algorithm instead of adding a new one, which keeps the risk low.
 - **Cost:** About 9 s locally (14 scratch-graph max-flows). Expect longer against FalkorDB Cloud, hence the cache.
 
+### D-043: CI runs the full test suite against a real FalkorDB
+- **Date:** 2026-10-16 · **Status:** Accepted · **By:** Bobby (ask: finish what's left in scope), Claude
+- **Decision:** `.github/workflows/tests.yml` runs on every push to `main` and every pull request. It starts `falkordb/falkordb:latest` as a service container (the image `docker-compose.yml` uses), installs with `uv sync --locked`, builds the demo graph from the committed data (`python -m blast_radius.ingest.load`, about 3 s), then runs `pytest`. A skipped test fails the job, because the tests skip themselves when the graph is missing and a green run with nothing tested would be misleading.
+- **Reason:** Every test needs the loaded graph, so a job without FalkorDB would pass while testing nothing. The committed advisory snapshot (D-033) means CI needs no network beyond the image and packages. Running it on PRs catches a broken query before Render auto-deploys `main` (D-035).
+- **Found on the way:** `test_drift` counted nodes before recording its decision, which MERGEs the `Person` "Priya". On a freshly built graph (always the case in CI) the count rose by one and the test failed; it only passed locally because Priya was left over from an earlier run. The count is now taken after the decision.
+- **Alternatives:** Mocking the graph (the product is the Cypher, so a mock would test nothing that matters). Pinning a FalkorDB version (kept `latest` to match local and Cloud; pin if an upgrade breaks a query).
+
+### D-044: Conversation history survives graph rebuilds
+- **Date:** 2026-10-16 · **Status:** Accepted · **By:** Claude
+- **Decision:** `build()` exports every `Session`/`Question` with the ids of the advisories and services each question cited (`queries/session_history.cypher`) before it drops the graph, and writes them back afterwards through the same `log_turn.cypher` the agent uses, keeping the original timestamps. A cited node that no longer exists is dropped; the question is kept. The build reports `questions_restored`. `Session.id` gets an index.
+- **Reason:** Closes the follow-up noted in D-029. Decisions already outlived rebuilds, so a rebuild (for example refreshing advisories) silently erased "what have we asked about storefront?" while keeping the decisions those questions led to. Reusing `log_turn.cypher` means one write path for episodic memory, and re-linking by id is the same approach decisions use. Simulated deploys (D-038) never dropped history, so they are unchanged.
+- **Verified:** 2026-10-16, `tests/test_history.py`: a question citing GHSA-9wv6-86v2-598j and storefront keeps its text, timestamp and both CITED edges across a full rebuild; the test fails without the change.
+- **Alternatives:** Keeping history outside the graph (would lose the graph links that make it queryable, the point of D-029). Rebuilding into a second graph and swapping names (bigger change; also would fix the empty-graph window, but D-038 already avoids rebuilds in the live demo).
+
 ### D-045: The server keeps the agent's plan moving
 - **Date:** 2026-10-16 · **Status:** Accepted · **By:** Bobby (bug report: Plan stuck at 0/3 on the live site), Claude
 - **Decision:** The agent keeps the last plan it was shown. When a graph tool starts and no step is in progress, the next pending step becomes in progress. When the answer is complete, every remaining step is marked done and the final plan is sent. Steps the model marks itself are kept. The system prompt now asks the model to send `update_plan` in the same response as each step's tool calls.

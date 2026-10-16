@@ -11,7 +11,8 @@ from pathlib import Path
 from blast_radius import config
 from blast_radius.db import graph
 from blast_radius.ingest import lockfile, osv
-from blast_radius.memory import check_drift, check_recovered, export_memory, import_memory
+from blast_radius.memory import (check_drift, check_recovered, export_history, export_memory, import_history,
+                                 import_memory)
 
 ROOT = Path(__file__).resolve().parents[3]
 DATA = ROOT / "data"
@@ -80,6 +81,7 @@ def build(osv_zip: Path = DATA / "osv/npm-snapshot.zip", deploys: dict[str, Path
     started = time.time()
     company = json.loads((DATA / "company.json").read_text())
     memory = export_memory()  # decisions outlive rebuilds; they are re-attached and re-checked below
+    history = export_history()  # so do the questions asked in chat sessions (D-029, D-044)
     g = graph()
     try:
         g.delete()
@@ -171,6 +173,8 @@ def build(osv_zip: Path = DATA / "osv/npm-snapshot.zip", deploys: dict[str, Path
 
     g.query("CREATE INDEX FOR (n:Decision) ON (n.id)")
     restored = import_memory(memory)
+    g.query("CREATE INDEX FOR (n:Session) ON (n.id)")
+    questions = import_history(history)
     stale = check_drift()
 
     stats = {
@@ -184,6 +188,7 @@ def build(osv_zip: Path = DATA / "osv/npm-snapshot.zip", deploys: dict[str, Path
         "vulnerabilities_affecting_installed": len({a["id"] for a in affects}),
         "affects_edges": len(affects),
         "decisions_restored": restored,
+        "questions_restored": questions,
         "decisions_now_stale": [s["decision"] for s in stale],
         "seconds": round(time.time() - started, 1),
     }
