@@ -58,11 +58,26 @@ def index():
 def overview(include_dev: bool = False):
     return {
         "stats": analysis._rows("graph_stats"),
-        "top": analysis._rows("top_advisories", include_dev=include_dev, limit=12),
+        "top": analysis.risk_board(limit=12, include_dev=include_dev),
         "agent_available": agent_available(),
         "issues_enabled": bool(os.getenv("GITHUB_TOKEN")),
         "issue_repo": ISSUE_REPO,
     }
+
+
+@app.get("/api/risk_board")
+def risk_board(limit: int = 10, include_dev: bool = False):
+    return analysis.risk_board(min(limit, 50), include_dev)
+
+
+estate_cache: dict = {}  # the estate plan only changes when a deploy changes the graph
+
+
+@app.get("/api/estate_plan")
+def estate_plan(include_dev: bool = False):
+    if include_dev not in estate_cache:
+        estate_cache[include_dev] = analysis.estate_plan(include_dev=include_dev)
+    return estate_cache[include_dev]
 
 
 @app.get("/api/search")
@@ -128,6 +143,19 @@ def record(d: DecisionIn):
         raise HTTPException(400, str(e))
 
 
+class NotAffectedIn(BaseModel):
+    person: str
+
+
+@app.post("/api/advisory/{vuln_id}/not_affected")
+def not_affected(vuln_id: str, body: NotAffectedIn):
+    """Record the proof of safety as not_affected decisions (button on the "No path found" card)."""
+    try:
+        return memory.record_not_affected(vuln_id, body.person)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.get("/api/decisions")
 def decisions():
     return [{k: v for k, v in d.items() if k != "signatures"} for d in analysis._rows("current_decisions")]
@@ -159,6 +187,7 @@ def simulate_deploy(scenario_id: str, rollback: bool = False):
     if not deploy_lock.acquire(timeout=60):
         raise HTTPException(409, "another deploy is running")
     try:
+        estate_cache.clear()
         return redeploy(s["service"], lock)
     finally:
         deploy_lock.release()

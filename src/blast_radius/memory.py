@@ -19,6 +19,15 @@ def _signatures(vuln_id: str, service: str) -> list[str]:
     return sorted(json.dumps([r["path"], r["chain"]]) for r in rows)
 
 
+def _name(name_at_version: str) -> str:
+    return name_at_version.rsplit("@", 1)[0]  # keeps scoped names like @koa/router
+
+
+def _via(signatures: list[str]) -> list[str]:
+    """Packages a decision's exposure ran through: every hop of every chain except the vulnerable one."""
+    return sorted({_name(n) for s in signatures for n in json.loads(s)[1][:-1]})
+
+
 def record_decision(vuln_id: str, service: str, verdict: str, reason: str, person: str) -> dict:
     if verdict not in VERDICTS:
         raise ValueError(f"verdict must be one of {VERDICTS}")
@@ -26,7 +35,7 @@ def record_decision(vuln_id: str, service: str, verdict: str, reason: str, perso
     decision_id = f"DEC-{uuid.uuid4().hex[:8]}"
     at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     params = {"id": vuln_id, "service": service, "person": person, "decision_id": decision_id,
-              "verdict": verdict, "reason": reason, "at": at, "signatures": sigs}
+              "verdict": verdict, "reason": reason, "at": at, "signatures": sigs, "via": _via(sigs)}
     started = time.perf_counter()
     res = graph().query(cypher("record_decision"), params)
     trace("cypher", "record_decision", cypher("record_decision"), params, (time.perf_counter() - started) * 1000,
@@ -37,8 +46,43 @@ def record_decision(vuln_id: str, service: str, verdict: str, reason: str, perso
             "at": at, "exposure_paths_recorded": len(sigs)}
 
 
+def record_not_affected(vuln_id: str, person: str) -> dict:
+    """Turn a proof of safety (F4) into memory: a not_affected decision for every service that installs
+    a package the advisory concerns, citing what was searched. Each one records no exposure paths, so
+    a later deploy that brings in an affected version makes it stale (F6)."""
+    from blast_radius.analysis import exposure
+    from blast_radius.ingest.osv import snapshot_date
+
+    ex = exposure(vuln_id)
+    if ex["exposed"]:
+        raise ValueError(f"{vuln_id} reaches {len(ex['services'])} service(s) in production; nothing to certify")
+    proof = ex["safety_proof"]
+    services = sorted({s for p in proof["packages"] for x in p["installed"] for s in x["services"]})
+    if not services:
+        raise ValueError(f"no service installs a package {vuln_id} concerns")
+    evidence = "; ".join(f"{p['package']} affected {' | '.join(p['affected_ranges'])}, installed "
+                         f"{', '.join(sorted({x['version'] for x in p['installed']})) or 'nowhere'}"
+                         for p in proof["packages"])
+    reason = (f"Proof of safety: no production dependency path reaches an affected version ({evidence}). "
+              f"Searched every install at any depth in all services; advisory data as of {snapshot_date()}.")
+    if proof["dev_only_exposure"]:
+        reason += f" Dev tooling only in: {', '.join(proof['dev_only_exposure'])}."
+    made = [record_decision(vuln_id, s, "not_affected", reason, person) for s in services]
+    return {"vulnerability": vuln_id, "services": services, "decisions": [d["decision"] for d in made],
+            "reason": reason}
+
+
 def recall_precedent(vuln_id: str) -> list[dict]:
-    return _rows("recall_precedent", id=vuln_id)
+    """Decisions on this advisory, then on the same package, then on advisories reached through the
+    same dependency chain (`match` says which, `via` names the shared packages)."""
+    rows = [{**r, "match": "advisory" if r["same_advisory"] else "package", "via": []}
+            for r in _rows("recall_precedent", id=vuln_id)]
+    via = sorted({_name(n) for r in _rows("exposure_paths", id=vuln_id, include_dev=True) for n in r["chain"] or []})
+    seen = {r["decision"] for r in rows}
+    if via:
+        rows += [{**r, "match": "path", "package": None} for r in _rows("path_precedent", id=vuln_id, via=via)
+                 if r["decision"] not in seen]
+    return rows
 
 
 def check_drift() -> list[dict]:
@@ -73,6 +117,15 @@ def check_recovered() -> list[dict]:
     return back
 
 
+def backfill_via() -> int:
+    """Give decisions recorded before VIA edges existed their path packages (path precedent)."""
+    rows = graph().ro_query("MATCH (d:Decision) WHERE NOT (d)-[:VIA]->() RETURN d.id, d.signatures").result_set
+    for decision_id, sigs in rows:
+        graph().query("MATCH (d:Decision {id: $id}), (p:Package) WHERE p.name IN $via CREATE (d)-[:VIA]->(p)",
+                      {"id": decision_id, "via": _via(sigs or [])})
+    return len(rows)
+
+
 # ------------------------------------------------ keep memory across graph rebuilds
 
 def export_memory() -> list[dict]:
@@ -89,7 +142,8 @@ def import_memory(decisions: list[dict]) -> int:
         res = g.query(cypher("record_decision"), {"id": d["vuln"], "service": d["service"], "person": d["person"],
                                                   "decision_id": d["id"], "verdict": d["verdict"],
                                                   "reason": d["reason"], "at": d["at"],
-                                                  "signatures": d["signatures"] or []})
+                                                  "signatures": d["signatures"] or [],
+                                                  "via": _via(d["signatures"] or [])})
         if res.result_set and d["status"] != "current":
             g.query("MATCH (d:Decision {id: $id}) SET d.status = $status, d.stale_reason = $why",
                     {"id": d["id"], "status": d["status"], "why": d["stale_reason"]})

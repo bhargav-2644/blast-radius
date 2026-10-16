@@ -5,6 +5,7 @@ decisions recorded in a running demo survive restarts.
 """
 from blast_radius.db import graph
 from blast_radius.ingest.load import build
+from blast_radius.memory import backfill_via
 
 
 def main():
@@ -13,7 +14,7 @@ def main():
     except Exception:  # graph does not exist yet
         count = 0
     if count:
-        print(f"graph already loaded ({count} services)")
+        print(f"graph already loaded ({count} services); linked {backfill_via()} older decisions to their paths")
     else:
         print("building graph…", build())
 

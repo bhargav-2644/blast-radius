@@ -135,3 +135,11 @@ def load_index(zip_path: Path, packages: set[str] | None = None) -> dict[str, li
             for pkg in adv.ranges.keys() | adv.versions.keys():
                 index.setdefault(pkg, []).append(adv)
     return index
+
+
+def snapshot_date(zip_path: Path | None = None) -> str:
+    """Date of the newest record in the advisory snapshot, for citing what a claim was checked against."""
+    zip_path = zip_path or Path(__file__).resolve().parents[3] / "data/osv/npm-snapshot.zip"
+    with zipfile.ZipFile(zip_path) as z:
+        y, m, d, *_ = max(i.date_time for i in z.infolist())
+    return f"{y:04d}-{m:02d}-{d:02d}"

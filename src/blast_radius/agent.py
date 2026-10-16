@@ -31,8 +31,11 @@ How to work:
 - For any question needing more than one tool, first call update_plan with 3-6 short steps, then keep it
   current (mark steps in_progress / done) as you go.
 - Resolve any advisory the user mentions with find_vulnerability before other tools.
+- For "what should we look at first?" style questions, use risk_board; for one fix across many
+  advisories, use estate_plan.
 - Before giving advice on an advisory, call recall_precedent: if the team decided something before
-  (about this advisory or the same package), say so and say whether that decision is still current.
+  (about this advisory, the same package, or another advisory reached through the same dependency chain),
+  say so, say which kind of match it is, and say whether that decision is still current.
 - Ground every claim in tool output. Show exposure as dependency chains (service → a → b → vulnerable)
   and cite numbers the tools return. Never invent paths, versions, customers or decisions.
 - When find_exposure says nothing is exposed, present its safety proof (what is installed versus the
@@ -235,7 +238,7 @@ class Agent:
         if precedent:
             p = precedent[0]
             lines.append(f"Precedent: {p['by']} marked **{p['verdict']}** for {p['service']} on {p['at'][:10]} "
-                         f"({'this advisory' if p['same_advisory'] else 'same package ' + p['package']}); "
+                         f"({'this advisory' if p['same_advisory'] else ('same package ' + p['package']) if p['package'] else p['about'] + ' through the same ' + ', '.join(p['via'])}); "
                          f"that decision is **{p['status']}**." + (f" {p['stale_reason']}" if p["stale_reason"] else ""))
             lines.append("")
         if not exposure["exposed"]:

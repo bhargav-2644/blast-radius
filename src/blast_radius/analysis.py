@@ -295,7 +295,72 @@ def upgrade_plan(vuln_id: str, include_dev: bool = False) -> dict:
             "vulnerable_links": sum(p["vulnerable_links"] for p in plans)}
 
 
+def estate_plan(severities: tuple[str, ...] = ("CRITICAL", "HIGH"), include_dev: bool = False) -> dict:
+    """One plan for many advisories at once: per service, a single min cut that separates the repo
+    from every install any of these advisories affects, then the same change grouped across services.
+    Fixing advisories together is cheaper than one by one when they share a chain (bump express once)."""
+    by_repo: dict[str, dict] = defaultdict(dict)
+    vulns_at: dict[tuple[str, str], set] = defaultdict(set)
+    fixes: dict[tuple[str, str], list] = defaultdict(list)
+    severity: dict[str, str] = {}
+    for r in _rows("estate_affected_installs", severities=list(severities), include_dev=include_dev):
+        k = (r["repo"], r["key"])
+        vulns_at[k].add(r["vuln"])
+        fixes[k].append(_best_fix(r["version"], r["fixed"] or []))
+        severity[r["vuln"]] = r["severity"]
+        by_repo[r["repo"]][r["key"]] = {"name": r["name"], "version": r["version"]}
+    for (repo, key), fs in fixes.items():
+        # one version that fixes every advisory on this install, if each advisory has a fix
+        by_repo[repo][key]["fix"] = None if None in fs else max(fs, key=_version)
+
+    # baseline: triaging one advisory at a time means one remediation per advisory per service
+    one_by_one = len({(repo, v) for (repo, _), vs in vulns_at.items() for v in vs})
+    changes: dict[tuple, dict] = {}
+    plans = []
+    for repo, targets in sorted(by_repo.items()):
+        plan = _repo_cut(repo, targets, include_dev)
+        edges = _rows("repo_requires_subgraph", repo=repo)
+        down = defaultdict(list)
+        for e in edges:
+            down[e["src"]].append(e["dst"])
+        for a in plan["actions"]:
+            # advisories whose affected installs sit at or below the changed link
+            start = next((e["dst"] for e in edges if f"{e['dst_name']}@{e['dst_version']}" == a["child"]
+                         and (e["src"] == "ROOT" if a["parent"] == repo else f"{e['src_name']}@{e['src_version']}" == a["parent"])), None)
+            seen, queue = ({start}, deque([start])) if start else (set(), deque())
+            while queue:
+                for n in down[queue.popleft()]:
+                    if n not in seen:
+                        seen.add(n); queue.append(n)
+            closes = sorted({v for t in seen if t in targets for v in vulns_at[(repo, t)]})
+            key = (a["kind"], a["parent"] if a["parent"] != repo else "", a["child"], a["fix"])
+            c = changes.setdefault(key, {**{k: a[k] for k in ("kind", "effort", "child", "fix", "range")},
+                                         "parent": a["parent"] if a["parent"] != repo else None,
+                                         "action": a["action"].replace(repo, "the service") if a["parent"] == repo else a["action"],
+                                         "services": [], "advisories": set()})
+            c["services"].append(repo)
+            c["advisories"].update(closes)
+        plans.append({"repo": repo, "total_effort": plan["total_effort"], "actions": len(plan["actions"]),
+                      "advisories": sorted({v for t in targets for v in vulns_at[(repo, t)]})})
+    grouped = sorted(changes.values(), key=lambda c: (-len(c["advisories"]), -len(c["services"]), c["effort"]))
+    for c in grouped:
+        c["advisories"] = sorted(c["advisories"])
+    return {"severities": list(severities), "include_dev": include_dev,
+            "advisories": len(severity), "by_severity": {s: sum(1 for v in severity.values() if v == s) for s in severities},
+            "services": plans,
+            "changes": grouped,
+            "total_changes": sum(len(c["services"]) for c in grouped),
+            "distinct_changes": len(grouped),
+            "one_by_one_fixes": one_by_one,
+            "total_effort": sum(p["total_effort"] for p in plans)}
+
+
 # ---------------------------------------------------------------- F8
+
+def risk_board(limit: int = 10, include_dev: bool = False) -> list[dict]:
+    """Advisories reaching production, ranked by business impact, those still needing a decision first."""
+    return _rows("risk_board", include_dev=include_dev, limit=limit)
+
 
 def chokepoints(limit: int = 10) -> list[dict]:
     return _rows("chokepoints", limit=limit)
