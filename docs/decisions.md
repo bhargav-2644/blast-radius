@@ -303,3 +303,31 @@ This log also serves as evidence for the hackathon's Rule 13 that the team made 
 - **Reason:** In agent mode the model called `update_plan` once with every step pending, then ran its tools and answered without updating it again, so the panel showed 0/3 after the run had finished. Prompt wording alone can't guarantee the model updates the plan, so the server makes sure the panel tracks the run. Pipeline mode was unaffected because it marks its own steps.
 - **Verified:** 2026-10-16, `tests/test_plan.py` (fake MCP session, no graph or API key): a plan written once goes pending → first step in progress → all done; model updates are kept; no plan means no plan events.
 - **Alternatives:** Only strengthening the prompt (still depends on the model). Mapping each tool to a plan step (the model's step titles are free text, so a mapping would guess wrong).
+
+### D-046: Every exposure path carries its evidence
+- **Date:** 2026-10-16 · **Status:** Accepted · **By:** Bobby (ask: "this is more than another dependency scanner"), Claude
+- **Decision:** `exposure_paths.cypher` returns, for each chain, the repo and ref it was read from, the lockfile file, when that lockfile was loaded (new `Repo.loaded_at`, set by `build` and by simulated deploys), the affected install's `node_modules` path, and the advisory's affected ranges for that package. `analysis.exposure` adds the range the installed version falls in, the nearest fix above it, and the advisory source (OSV, link, snapshot date). The Findings card, the pipeline answer and drafted issues show it.
+- **Reason:** A judge should be able to check that the graph, not the model, supports each answer. All of this was already in the graph or the data files except the load time.
+- **Limits:** On a graph built before this change (the live deploy until its next rebuild or simulated deploy), `last_seen` is empty and is shown as "not recorded (unverified)" rather than guessed.
+
+### D-047: Recalled decisions explain themselves
+- **Date:** 2026-10-16 · **Status:** Accepted · **By:** Bobby, Claude
+- **Decision:** `recall_precedent` now returns, for each decision, who made it and when (to the minute), why, which advisory (with severity) and which services the same sign-off covers, and `exposure`: the paths recorded with the decision compared with today's, as new and removed chains and a one-line summary. The Decisions tab shows the same exposure line.
+- **Reason:** Track 2 is about memory an organisation can rely on. "Priya accepted this" is only useful with "and since then one new path appeared through @koa/router". The comparison reuses the signatures each decision already stores (D-014), so it is a graph query rather than a new store.
+
+### D-048: Each upgrade step is checked before it is recommended
+- **Date:** 2026-10-16 · **Status:** Accepted · **By:** Bobby, Claude
+- **Decision:** Every action in `upgrade_plan` and `estate_plan` gets a `verification` with checks and a status: `verified` (fixed version listed by OSV, outside the affected ranges of every known advisory on that package, and allowed by the declared range or a same-major bump), `partial` (an override against the parent's declared range, or a major-version bump), `unverified` (no specific version: the step needs a new release of a parent, and the npm registry is not queried), or `failed`. Before the cut runs, a fix version that another advisory on the same package still affects is raised to the smallest fixed version that clears all of them, and the check says so.
+- **Reason:** A minimal cut is not proof that an upgrade is valid. On the demo CVE the plan used to say form-data 4.0.4, which GHSA-hmw2-7cc7-3qxx (HIGH) still affects; it now says 4.0.6 and explains why. The min-cut algorithm (D-024) is unchanged.
+- **Alternatives:** Querying the npm registry for real release versions and peer ranges (more checks, but network access is blocked in build sessions and adds a failure mode to the live demo).
+
+### D-049: The risk score shows its factors
+- **Date:** 2026-10-16 · **Status:** Accepted · **By:** Bobby, Claude
+- **Decision:** `risk_board.cypher` also returns customer counts by tier, the critical services exposed, affected installs, how many are direct dependencies, and how many have a published fix. `analysis.risk_breakdown` (MCP tool `risk_breakdown`) returns one advisory's score as a formula plus a table of factors, each marked as scored or context. The risk board has a "Why this rank" row under each advisory, and the pipeline answer has a "Why this is urgent" line. Reachability is labelled "dependency chain only; unverified" because call-graph reachability is not analysed.
+- **Reason:** A ranked list without its factors reads like an AI-generated score. The score formula from D-041 is unchanged, so the ranking judges see is the same; the extra factors are shown as context rather than folded in with made-up weights.
+
+### D-050: What changed since the last investigation
+- **Date:** 2026-10-16 · **Status:** Accepted · **By:** Bobby, Claude
+- **Decision:** Each advisory has one `(:Investigation {vuln, at, signatures, lockfiles})-[:OF]->(:Vulnerability)` snapshot of its production exposure. The new `what_changed` MCP tool (called by the pipeline after `find_exposure`) compares today's exposure with it: services newly exposed or no longer exposed, chains added or removed, chains whose versions changed at the same install path, lockfiles swapped by deploys, and decisions on the advisory that went stale since. It then saves today's exposure as the new snapshot. Snapshots are exported and restored across rebuilds like decisions (D-044).
+- **Reason:** It makes drift (F6) readable in one card and gives a reason to come back. One snapshot per advisory keeps the graph from growing with every look on the public demo.
+- **Limits:** The snapshot is shared by everyone using the deploy, so "last investigation" means the last look by anyone, not by you.

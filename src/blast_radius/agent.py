@@ -36,7 +36,16 @@ How to work:
   advisories, use estate_plan.
 - Before giving advice on an advisory, call recall_precedent: if the team decided something before
   (about this advisory, the same package, or another advisory reached through the same dependency chain),
-  say so, say which kind of match it is, and say whether that decision is still current.
+  say so, say which kind of match it is, and say whether that decision is still current. Explain it from
+  the tool output: who decided, when, why, which advisory and services it covers, and whether its exposure
+  has changed since (`exposure.summary`).
+- After find_exposure, call what_changed once and report what changed since the last investigation
+  (or that this is the first look). When asked why an advisory matters or what to fix first, call
+  risk_breakdown and cite its factors instead of giving an unexplained priority.
+- Each exposed service carries evidence (repo, lockfile, when it was loaded, install path, affected ranges,
+  advisory source). Cite it for at least the first path. Say "not recorded" when last_seen is null.
+- Each upgrade_plan action carries a verification status (verified, partial, unverified, failed). Label every
+  step you recommend with it, and never present an unverified step as checked.
 - Ground every claim in tool output. Show exposure as dependency chains (service → a → b → vulnerable)
   and cite numbers the tools return. Never invent paths, versions, customers or decisions.
 - When find_exposure says nothing is exposed, present its safety proof (what is installed versus the
@@ -233,8 +242,8 @@ class Agent:
         """Deterministic triage through the same MCP tools, for use without an API key."""
         emit = self._emit
         await emit({"type": "start", "mode": "pipeline", "model": None})
-        steps = ["Resolve the advisory", "Check past decisions", "Trace exposure paths",
-                 "Find affected customers", "Compute the least-effort fix"]
+        steps = ["Resolve the advisory", "Check past decisions", "Trace exposure and what changed",
+                 "Find affected customers and urgency", "Compute and verify the least-effort fix"]
         plan = [{"title": s, "status": "pending"} for s in steps]
 
         async def mark(i, status):
@@ -262,14 +271,18 @@ class Agent:
         precedent = await self.call("recall_precedent", {"vulnerability_id": vid})
         await mark(1, "done"); await mark(2, "in_progress")
         exposure = await self.call("find_exposure", {"vulnerability_id": vid})
+        changes = await self.call("what_changed", {"vulnerability_id": vid})
         await mark(2, "done")
         lines = [f"**{vid}** ({hits[0]['severity']}): {hits[0]['summary']}", ""]
         if precedent:
             p = precedent[0]
-            lines.append(f"Precedent: {p['by']} marked **{p['verdict']}** for {p['service']} on {p['at'][:10]} "
-                         f"({'this advisory' if p['same_advisory'] else ('same package ' + p['package']) if p['package'] else p['about'] + ' through the same ' + ', '.join(p['via'])}); "
-                         f"that decision is **{p['status']}**." + (f" {p['stale_reason']}" if p["stale_reason"] else ""))
+            lines.append(f"Precedent: {p['by']} marked **{p['verdict']}** on {p['at'][:10]} "
+                         f"({'this advisory' if p['same_advisory'] else ('same package ' + p['package']) if p['package'] else p['about'] + ' through the same ' + ', '.join(p['via'])}), "
+                         f"covering {', '.join(p['covers']['services'])}, because \"{p['reason']}\". "
+                         f"That decision is **{p['status']}**; its exposure is {p['exposure']['summary']}."
+                         + (f" {p['stale_reason']}" if p["stale_reason"] else ""))
             lines.append("")
+        lines += [_changes_line(changes), ""]
         if not exposure["exposed"]:
             for i in (3, 4):
                 await mark(i, "done")
@@ -283,25 +296,53 @@ class Agent:
         else:
             await mark(3, "in_progress")
             impact = await self.call("customer_impact", {"vulnerability_id": vid})
+            risk = await self.call("risk_breakdown", {"vulnerability_id": vid})
             await mark(3, "done"); await mark(4, "in_progress")
             plan_res = await self.call("upgrade_plan", {"vulnerability_id": vid})
             await mark(4, "done")
-            svcs = exposure["services"]
+            svcs, src = exposure["services"], exposure["advisory_source"]
             lines.append(f"**Exposed: {len(svcs)} services, {len(impact['customers'])} customers "
                          f"({impact['by_tier']['enterprise']} enterprise).**")
             for s in svcs:
                 p0 = s["paths"][0]
-                lines.append(f"- `{s['service']}` ({s['team']}): {s['service']} → " + " → ".join(p0["chain"]))
+                lines.append(f"- `{s['service']}` ({s['team']}): {s['service']} → " + " → ".join(p0["chain"])
+                             + (f" (in `{p0['matched_range']}`)" if p0.get("matched_range") else ""))
+            seen = sorted({s["repo"]["last_seen"] or "" for s in svcs})
+            lines.append(f"\n_Evidence: each chain is read from that service's lockfile in the graph (last loaded "
+                         f"{seen[-1][:16].replace('T', ' ') + ' UTC' if seen[-1] else 'at an unrecorded time'}); "
+                         f"advisory ranges from [{src['source']}]({src['url']}), snapshot {src['snapshot']}. "
+                         "Each lockfile, install path and range is in the Findings panel._")
+            if risk.get("breakdown"):
+                lines += ["", f"**Why this is urgent:** score {risk['breakdown']['formula']}. "
+                              + "; ".join(f"{f['factor'].lower()}: {f['value']}" + (f" ({f['note']})" if f.get("note", "").startswith("unverified") else "")
+                                          for f in risk["breakdown"]["factors"] if not f["in_score"]) + "."]
+            v = plan_res["verification"]
             lines += ["", f"**Fix:** {plan_res['total_actions']} changes remove all "
-                          f"{plan_res['exposure_paths']:,} exposure chains:"]
+                          f"{plan_res['exposure_paths']:,} exposure chains ({v['verified']} verified, "
+                          f"{v['partial'] + v['unverified'] + v['failed']} not fully verified):"]
             for s in plan_res["services"]:
                 for a in s["actions"]:
-                    lines.append(f"- {s['repo']}: {a['action']}")
+                    lines.append(f"- {s['repo']}: {a['action']} _[{a['verification']['status']}]_")
         answer = "\n".join(lines)
         await say(answer)
         log_turn(self.session_id, question, answer,
                  [{"tool": "pipeline", "input": {"vulnerability_id": vid}}])
         await emit({"type": "done", "answer": answer, "refused": False})
+
+
+def _changes_line(c: dict) -> str:
+    if c.get("first_look"):
+        return "**What changed:** first investigation of this advisory; today's exposure is saved as the baseline."
+    if not c.get("changed"):
+        return f"**What changed:** nothing since the last investigation ({c['last_look'][:16].replace('T', ' ')} UTC)."
+    parts = [f"{label} {', '.join(c[k]) if isinstance(c[k][0], str) else len(c[k])}"
+             for k, label in (("newly_exposed_services", "newly exposed:"), ("no_longer_exposed_services", "no longer exposed:"),
+                              ("new_paths", "new paths:"), ("removed_paths", "removed paths:"))
+             if c[k]]
+    parts += [f"{x['service']} lockfile {x['before']} → {x['after']}" for x in c["lockfiles_changed"]]
+    parts += [f"{x['service']}: {x['before']} became {x['after']}" for x in c["changed_versions"]]
+    parts += [f"decision {x['decision']} ({x['verdict']} by {x['made_by']}) went stale" for x in c["decisions_gone_stale"]]
+    return f"**What changed since {c['last_look'][:16].replace('T', ' ')} UTC:** " + "; ".join(parts) + "."
 
 
 async def _main(question: str):

@@ -158,7 +158,9 @@ def not_affected(vuln_id: str, body: NotAffectedIn):
 
 @app.get("/api/decisions")
 def decisions():
-    return [{k: v for k, v in d.items() if k != "signatures"} for d in analysis._rows("current_decisions")]
+    return [{**{k: v for k, v in d.items() if k != "signatures"},
+             "exposure": memory.exposure_change(d["vuln"], d["service"], d["signatures"])}
+            for d in analysis._rows("current_decisions")]
 
 
 @app.post("/api/drift")
