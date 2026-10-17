@@ -165,7 +165,8 @@ def decisions():
 
 @app.post("/api/drift")
 def drift():
-    return memory.check_drift()
+    """Re-check every decision; returns each status change (stale, disputed, verified, current again)."""
+    return memory.recheck()
 
 
 SCENARIOS = {s["id"]: s for s in json.loads((DATA / "scenarios/scenarios.json").read_text())}

@@ -12,7 +12,7 @@ from pathlib import Path
 from blast_radius import config
 from blast_radius.db import graph
 from blast_radius.ingest import lockfile, osv
-from blast_radius.memory import (check_drift, check_recovered, export_history, export_investigations,
+from blast_radius.memory import (check_drift, recheck, split_changes, export_history, export_investigations,
                                  export_memory, import_history, import_investigations, import_memory)
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -253,7 +253,7 @@ def redeploy(service: str, lock_path: Path, osv_zip: Path = DATA / "osv/npm-snap
                       "DETACH DELETE pv RETURN count(pv)").result_set[0][0]
     g.query("MATCH (r:Repo {name: $s}) SET r.lockfile = $f, r.loaded_at = $at",
             {"s": service, "f": rows["lockfile"], "at": _now()})
-    drift, recovered = check_drift(), check_recovered()
+    drift, recovered = split_changes(recheck())
     return {"service": service, "lockfile": rows["lockfile"], "installs": len(rows["installs"]),
             "package_versions_removed": orphans, "drift": drift, "recovered": recovered, "seconds": round(time.time() - started, 1)}
 

@@ -135,7 +135,9 @@ def chokepoints(limit: int = 10) -> str:
 def record_decision(vulnerability_id: str, service: str, verdict: str, reason: str, person: str) -> str:
     """Store a triage decision in the graph so it is reused later. verdict is one of
     not_affected, risk_accepted, fix_planned, fixed. The decision remembers the exact exposure
-    paths it was made against, so it can be reopened if new paths appear."""
+    paths it was made against, so it can be reopened if new paths appear, and it supersedes any
+    earlier decision on the same advisory and service. A `fixed` decision while exposure paths remain
+    is recorded as disputed; a fix is verified once the graph shows no path."""
     return _json(memory.record_decision(vulnerability_id, service, verdict, reason, person))
 
 
@@ -144,16 +146,18 @@ def record_decision(vulnerability_id: str, service: str, verdict: str, reason: s
 def recall_precedent(vulnerability_id: str) -> str:
     """Past decisions about this advisory, about other advisories on the same package, or about
     advisories reached through the same dependency chain (`match`, `via`), with who made them, why,
-    and whether they are still current or have gone stale."""
+    the earlier decisions each one replaced, and what the graph says about them now: current, stale
+    (new path since), disputed (says fixed, still exposed) or verified (fix confirmed, no path left)."""
     return _json(memory.recall_precedent(vulnerability_id))
 
 
 @server.tool()
 @traced
 def check_drift() -> str:
-    """Re-check every current decision against today's dependency graph. Decisions whose exposure
-    changed (a new path appeared) are marked stale and returned."""
-    return _json(memory.check_drift())
+    """Re-check every decision in force against today's dependency graph and return each one whose
+    status changed: `stale` (a new exposure path appeared), `disputed` (recorded as fixed but paths
+    remain), `verified` (a planned or claimed fix left no exposure path) or `current` again."""
+    return _json(memory.recheck())
 
 
 @server.tool()

@@ -2,7 +2,8 @@
 // rather than by severity alone. Score = severity weight × (tier-weighted customers reached + services),
 // where customers are reached directly or through up to 3 service calls (as in customer_impact).
 // Triage status comes from decision memory: which exposed services already have a decision, and
-// whether any of those decisions has gone stale.
+// whether any of those decisions has gone stale or is disputed (says fixed, still exposed; D-051).
+// Superseded decisions are ignored.
 // It also returns the factors behind the score and the context around it (critical services, affected
 // installs, direct dependencies, published fixes), so the rank can be explained (D-049).
 // $id = null ranks every advisory; an id returns that advisory's row only.
@@ -17,10 +18,11 @@ WITH v, installs, direct, with_fix, collect(DISTINCT exposed) AS services
 UNWIND services AS exposed
 OPTIONAL MATCH (c:Customer)-[:USES]->(:Service)-[:CALLS*0..3]->(exposed)
 WITH v, installs, direct, with_fix, services, collect(DISTINCT c) AS customers
-OPTIONAL MATCH (d:Decision)-[:ABOUT]->(v), (d)-[:FOR]->(ds:Service) WHERE ds IN services
+OPTIONAL MATCH (d:Decision)-[:ABOUT]->(v), (d)-[:FOR]->(ds:Service) WHERE ds IN services AND d.status <> 'superseded'
 WITH v, installs, direct, with_fix, services, customers, collect(DISTINCT ds.name) AS decided,
-     toInteger(sum(CASE WHEN d.status = 'stale' THEN 1 ELSE 0 END)) AS stale
-WITH v, installs, direct, with_fix, services, customers, decided, stale,
+     toInteger(sum(CASE WHEN d.status = 'stale' THEN 1 ELSE 0 END)) AS stale,
+     toInteger(sum(CASE WHEN d.status = 'disputed' THEN 1 ELSE 0 END)) AS disputed
+WITH v, installs, direct, with_fix, services, customers, decided, stale, disputed,
      CASE v.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MODERATE' THEN 2 ELSE 1 END AS sev,
      reduce(w = 0, c IN customers | w + CASE c.tier WHEN 'enterprise' THEN 5 WHEN 'business' THEN 3 ELSE 1 END) AS weight
 RETURN v.id AS id, v.severity AS severity, v.summary AS summary, v.aliases AS aliases,
@@ -31,8 +33,8 @@ RETURN v.id AS id, v.severity AS severity, v.summary AS summary, v.aliases AS al
        [s IN services | s.name] AS service_names,
        [s IN services WHERE s.tier = 'critical' | s.name] AS critical_services,
        installs, direct, with_fix, sev AS severity_weight, weight AS customer_weight,
-       size(decided) AS decided, stale,
-       CASE WHEN stale > 0 THEN 'stale' WHEN size(decided) = 0 THEN 'untriaged'
+       size(decided) AS decided, stale, disputed,
+       CASE WHEN disputed > 0 THEN 'disputed' WHEN stale > 0 THEN 'stale' WHEN size(decided) = 0 THEN 'untriaged'
             WHEN size(decided) < size(services) THEN 'partly triaged' ELSE 'triaged' END AS triage,
        sev * (weight + size(services)) AS score
 ORDER BY CASE triage WHEN 'triaged' THEN 1 ELSE 0 END, score DESC, id

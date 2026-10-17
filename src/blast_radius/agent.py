@@ -38,7 +38,9 @@ How to work:
   (about this advisory, the same package, or another advisory reached through the same dependency chain),
   say so, say which kind of match it is, and say whether that decision is still current. Explain it from
   the tool output: who decided, when, why, which advisory and services it covers, and whether its exposure
-  has changed since (`exposure.summary`).
+  has changed since (`exposure.summary`). Its `status` is what the graph says about it now: current, stale
+  (new path since), disputed (recorded as fixed but paths remain: say so plainly) or verified (the fix is
+  confirmed: no path left). Mention earlier decisions it replaced (`replaces`) when they differ.
 - After find_exposure, call what_changed once and report what changed since the last investigation
   (or that this is the first look). When asked why an advisory matters or what to fix first, call
   risk_breakdown and cite its factors instead of giving an unexplained priority.
@@ -279,8 +281,10 @@ class Agent:
             lines.append(f"Precedent: {p['by']} marked **{p['verdict']}** on {p['at'][:10]} "
                          f"({'this advisory' if p['same_advisory'] else ('same package ' + p['package']) if p['package'] else p['about'] + ' through the same ' + ', '.join(p['via'])}), "
                          f"covering {', '.join(p['covers']['services'])}, because \"{p['reason']}\". "
-                         f"That decision is **{p['status']}**; its exposure is {p['exposure']['summary']}."
-                         + (f" {p['stale_reason']}" if p["stale_reason"] else ""))
+                         f"That decision is **{p['status']}**{STATUS_MEANS.get(p['status'], '')}; "
+                         f"its exposure is {p['exposure']['summary']}."
+                         + (f" {p['stale_reason']}" if p["stale_reason"] and p["status"] != "current" else "")
+                         + "".join(f" It replaced {o['verdict']} by {o['by']} ({o['at'][:10]})." for o in p["replaces"][:2]))
             lines.append("")
         lines += [_changes_line(changes), ""]
         if not exposure["exposed"]:
@@ -330,6 +334,11 @@ class Agent:
         await emit({"type": "done", "answer": answer, "refused": False})
 
 
+STATUS_MEANS = {"stale": " (a new exposure path appeared since)",
+                "disputed": " (recorded as fixed, but the graph still shows exposure)",
+                "verified": " (the graph confirms the fix: no exposure path left)"}
+
+
 def _changes_line(c: dict) -> str:
     if c.get("first_look"):
         return "**What changed:** first investigation of this advisory; today's exposure is saved as the baseline."
@@ -341,7 +350,10 @@ def _changes_line(c: dict) -> str:
              if c[k]]
     parts += [f"{x['service']} lockfile {x['before']} → {x['after']}" for x in c["lockfiles_changed"]]
     parts += [f"{x['service']}: {x['before']} became {x['after']}" for x in c["changed_versions"]]
-    parts += [f"decision {x['decision']} ({x['verdict']} by {x['made_by']}) went stale" for x in c["decisions_gone_stale"]]
+    parts += [f"decision {x['decision']} ({x['verdict']} by {x['made_by']}) is now {x.get('status', 'stale')}"
+              for x in c["decisions_gone_stale"]]
+    parts += [f"decision {x['decision']} ({x['verdict']} by {x['made_by']}) on {x['service']}: fix confirmed by the graph"
+              for x in c.get("decisions_verified", [])]
     return f"**What changed since {c['last_look'][:16].replace('T', ' ')} UTC:** " + "; ".join(parts) + "."
 
 

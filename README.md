@@ -29,7 +29,7 @@ uv run python -m blast_radius.agent "Are we affected by CVE-2025-7783?"   # agen
 uv run python -m blast_radius.mcp_server # the graph tools as an MCP server (stdio), e.g. for Claude Desktop
 ```
 
-Simulate a deploy and watch past decisions drift: in the web app, open **Decisions** and press **Deploy** (then **Roll back**). This swaps storefront's dependency tree in place, in under a second, and re-checks every decision. Scenarios are listed in `data/scenarios/scenarios.json`. From the command line, a full rebuild with the swapped lockfile does the same:
+Simulate a deploy and watch past decisions drift: in the web app, open **Decisions** and press **Deploy** (then **Roll back**). A second scenario ships the proxy-addr fix to storefront: record `fix_planned` on GHSA-jqcg-44mw-7w3h for storefront, deploy it, and the graph marks the decision `verified`. This swaps storefront's dependency tree in place, in under a second, and re-checks every decision. Scenarios are listed in `data/scenarios/scenarios.json`. From the command line, a full rebuild with the swapped lockfile does the same:
 
 ```bash
 uv run python -m blast_radius.ingest.load --deploy storefront=data/scenarios/storefront-adds-koa-router.json.gz
@@ -77,6 +77,7 @@ flowchart LR
     Decision -- ABOUT --> Vulnerability
     Decision -- FOR --> Service
     Decision -- VIA --> Package
+    Decision -- SUPERSEDES --> Decision
     Investigation -- OF --> Vulnerability
     Session -- ASKED --> Question
     Question -- CITED --> Vulnerability
@@ -92,7 +93,7 @@ flowchart LR
 | `Install` | `key`, `repo`, `path` (`node_modules/...`), `name`, `version`, `dev` | One installed package at one path in one repo: the exact resolution, so chains are never mixed across repos (D-022) |
 | `PackageVersion`, `Package` | `purl`, `name`, `version` | The merged, estate-wide package layer, used for PageRank chokepoints |
 | `Vulnerability` | `id`, `aliases`, `summary` (full-text indexed), `severity`, `published` | An OSV advisory. `AFFECTS` edges are precomputed by evaluating its semver ranges against every installed version (D-005), and carry the fixed versions (D-023) |
-| `Decision` | `id`, `verdict`, `reason`, `at`, `signatures`, `status` | A triage decision. `signatures` is the exact exposure (install path + chain) it was made against, which is how drift is detected (D-014, D-028) |
+| `Decision` | `id`, `verdict`, `reason`, `at`, `signatures`, `status`, `superseded_by` | A triage decision. `signatures` is the exact exposure (install path + chain) it was made against (D-028). `status` is re-derived from the graph: `current`, `stale` (new path since), `disputed` (says fixed, paths remain), `verified` (fix confirmed, no path left) or `superseded` by a newer decision on the same advisory and service (D-051) |
 | `Investigation` | `vuln`, `at`, `signatures`, `lockfiles` | The last snapshot of an advisory's production exposure, for "what changed since the last look" (D-050) |
 | `Session`, `Question` | `id`; `text`, `answer`, `tools`, `at` | Episodic memory of conversations and what each answer cited (D-029) |
 
@@ -124,9 +125,9 @@ Every query the product runs is a file in [queries/](queries/), and the web app 
 | `affected_installs`, `repo_requires_subgraph` | F3 | Input to the upgrade cut: affected installs per repo and the repo's install graph |
 | `package_advisories` | F3 | Every advisory on the packages a plan touches, to check that a fix version is not itself affected (D-048) |
 | `risk_board` | | Advisories reaching production ranked by severity × tier-weighted customers reached, untriaged first, with the factors behind each score (D-041, D-049) |
-| `record_decision` | F5 | Writes a `Decision` with its exposure signatures and `VIA` edges to the packages on its chains |
+| `record_decision` | F5 | Writes a `Decision` with its exposure signatures and `VIA` edges to the packages on its chains, and supersedes the decision in force on the same advisory and service (D-051) |
 | `recall_precedent`, `path_precedent` | F5 | Past decisions on the same advisory, the same package, or another advisory reached through the same dependency chain (D-039) |
-| `current_decisions`, `exposure_signatures` | F6 | Every decision and today's exposure, compared to mark decisions stale (drift) |
+| `current_decisions`, `exposure_signatures` | F6 | Every decision and today's exposure, compared to re-derive each status: stale, disputed, verified or current (D-051) |
 | `advisory_signatures`, `save_investigation`, `investigations` | F6 | What changed since the last investigation of an advisory (D-050) |
 | `log_turn`, `session_history` | Memory | Episodic memory of questions, answers and cited nodes, kept across rebuilds (D-044) |
 | `repo_lockfiles` | F6 | Which lockfile each service runs, for simulated deploys (D-038) |
