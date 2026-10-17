@@ -4,6 +4,15 @@
     "service": "storefront",
     "lockfile": "storefront-adds-koa-router.json.gz",
     "title": "storefront adds @koa/router",
-    "description": "A synthetic change to storefront's lockfile that adds @koa/router 10.1.1, which pulls in path-to-regexp 6.2.1. Any decision on a path-to-regexp advisory for storefront was made without this path."
+    "description": "A synthetic change to storefront's lockfile that adds @koa/router 10.1.1, which pulls in path-to-regexp 6.2.1. Any decision on a path-to-regexp advisory for storefront was made without this path.",
+    "tip": "e.g. risk_accepted on GHSA-9wv6-86v2-598j, then deploy and watch it go stale"
+  },
+  {
+    "id": "storefront-fixes-proxy-addr",
+    "service": "storefront",
+    "lockfile": "storefront-fixes-proxy-addr.json.gz",
+    "title": "storefront ships the proxy-addr fix",
+    "description": "A synthetic lockfile refresh that moves storefront from proxy-addr 2.0.7 to 2.0.8, the step the upgrade plan gives for GHSA-jqcg-44mw-7w3h (CRITICAL). A fix_planned decision on it for storefront is confirmed by the graph once no exposure path is left; a fixed decision recorded before the deploy is disputed until then.",
+    "tip": "e.g. fix_planned on GHSA-jqcg-44mw-7w3h, then deploy and watch the graph confirm the fix"
   }
 ]

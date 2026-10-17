@@ -81,7 +81,7 @@ code, pre, .mono { font-family: var(--mono); font-size: 12px; }
 .brow .id { font-family: var(--mono); font-size: 11.5px; } .brow .sum { display: block; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .brow .num { color: var(--muted); } .brow .num b { color: var(--ink); }
 .tri { font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 99px; background: var(--sunk); color: var(--muted); justify-self: start; }
-.tri.untriaged, .tri.stale { color: var(--warn); }
+.tri.untriaged, .tri.stale, .tri.disputed { color: var(--warn); }
 @media (max-width: 700px) { .brow { grid-template-columns: 64px 1fr 80px; } .brow .num { display: none; } }
 .chip b { display: block; font-size: 13px; margin-bottom: 2px; } .chip span { font-size: 12px; color: var(--muted); }
 .banner { margin: 0 0 16px; padding: 10px 14px; border-radius: 10px; background: var(--accent-soft); font-size: 13px; color: var(--muted); }
@@ -169,6 +169,7 @@ pre.code { margin: 0; background: var(--code-bg); color: var(--code-ink); paddin
 .stats div { background: var(--sunk); border-radius: 8px; padding: 6px 9px; font-size: 11.5px; color: var(--muted); }
 .stats b { display: block; font-size: 18px; color: var(--ink); }
 .ok-t { color: var(--ok); } .warn-t { color: var(--warn); }
+.sev.stale, .sev.disputed { color: var(--warn); } .sev.verified { color: var(--ok); background: var(--ok-soft); }
 .evd { font-size: 11px; color: var(--faint); margin: 1px 0 4px 12px; word-break: break-word; } .evd a { color: inherit; }
 .vb { font-size: 10px; font-weight: 700; padding: 0 6px; border-radius: 99px; background: var(--sunk); color: var(--muted); margin-left: 4px; white-space: nowrap; }
 .vb.verified { color: var(--ok); } .vb.partial { color: var(--warn); } .vb.failed { color: var(--danger); background: var(--danger-soft); }
@@ -225,7 +226,7 @@ dialog pre { white-space: pre-wrap; background: var(--sunk); padding: 10px; bord
     </div>
     <div class="stream" id="stream"><div class="col" id="feed"></div></div>
     <div class="composer"><div class="col">
-      <div class="box"><textarea id="input" rows="1" placeholder="Ask about an advisory, e.g. Are we affected by CVE-2025-7783?"></textarea><button class="send" id="send">Run</button></div>
+      <div class="box"><textarea id="input" rows="1" maxlength="4000" placeholder="Ask about an advisory, e.g. Are we affected by CVE-2025-7783?"></textarea><button class="send" id="send">Run</button></div>
       <div class="hint"><span>Every step the agent takes, and every Cypher query behind it, streams here as it happens.</span><span>Enter to run · Shift+Enter for a new line</span></div>
     </div></div>
   </main>
@@ -249,6 +250,15 @@ dialog pre { white-space: pre-wrap; background: var(--sunk); padding: 10px; bord
 
 <script>
 const $ = s => document.querySelector(s);
+// what the graph says about a decision now (D-051): stale and disputed need attention, verified is a confirmed fix
+const DECISION_NOTE = { stale: "warn-t", disputed: "warn-t", verified: "ok-t" };
+const decisionNote = d => d.stale_reason && d.status !== "current" ? `<div class="small ${DECISION_NOTE[d.status] || "muted"}">${d.status === "verified" ? "Fix confirmed by the graph: " : ""}${esc(d.stale_reason)}</div>` : "";
+const replacesNote = list => list && list.length ? `<div class="small muted">Replaces ${list.map(o => `${esc(o.verdict)} by ${esc(o.by)} on ${esc((o.at || "").slice(0, 10))}`).join(", ")}</div>` : "";
+const changeLine = x => x.status === "verified" ? `<div class="ok-t">${esc(x.decision)} (${esc(x.verdict)} by ${esc(x.made_by)}) on ${esc(x.vulnerability)} for ${esc(x.service)}: fix confirmed, ${esc(x.why)}.</div>`
+  : x.status === "current" ? `<div class="ok-t">${esc(x.decision)} (${esc(x.verdict)}) on ${esc(x.vulnerability)} for ${esc(x.service)} matches the graph again.</div>`
+  : `<div class="warn-t">${esc(x.decision)} (${esc(x.verdict)} by ${esc(x.made_by)}) on ${esc(x.vulnerability)} for ${esc(x.service)} is now ${esc(x.status)}: ${esc(x.why)}</div>`;
+// FastAPI sends a string, or for invalid input a list of {loc, msg}
+const errorText = d => Array.isArray(d) ? d.map(e => `${(e.loc || []).slice(-1)[0] || "input"}: ${e.msg}`).join("; ") : d;
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = n => Number(n || 0).toLocaleString();
@@ -274,7 +284,7 @@ function resetState() {
 
 async function api(path, opts) {
   const r = await fetch(path, opts && opts.body ? { method: "POST", headers: {"Content-Type": "application/json"}, ...opts } : opts);
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  if (!r.ok) throw new Error(errorText((await r.json().catch(() => ({}))).detail) || r.statusText);
   return r.json();
 }
 
@@ -435,7 +445,7 @@ function summarize(tool, input, r) {
     case "customer_impact": return `${r.customers.length} customers · ${r.by_tier?.enterprise ?? 0} enterprise`;
     case "upgrade_plan": return `${r.total_actions} changes remove ${fmt(r.exposure_paths)} chains · ${r.verification?.verified ?? 0} verified`;
     case "recall_precedent": return r.length ? `${r.length} past decision${r.length > 1 ? "s" : ""}` : "no precedent";
-    case "check_drift": return r.length ? `${r.length} decision(s) stale` : "all decisions current";
+    case "check_drift": return r.length ? `${r.length} decision(s) changed status` : "all decisions match the graph";
     case "chokepoints": return `${r.length} packages`;
     case "estate_plan": return `${r.total_changes} changes for ${r.advisories} advisories`;
     case "risk_board": return `${r.filter(x => x.triage !== "triaged").length} need a decision`;
@@ -556,13 +566,13 @@ function addFinding(html) {
 }
 // Recalled decisions, explained (D-047): who, when, why, what it covers, and whether its exposure moved since
 function precedentCards(r, src) {
-  return r.map(x => `<div class="card"><h4><span class="sev ${x.status === "stale" ? "MODERATE" : ""}">${esc(x.status)}</span>${esc(x.verdict)} · ${esc(x.service)}<span class="src">${src}</span></h4>
+  return r.map(x => `<div class="card"><h4><span class="sev ${esc(x.status)}">${esc(x.status)}</span>${esc(x.verdict)} · ${esc(x.service)}<span class="src">${src}</span></h4>
     <div class="small">“${esc(x.reason)}”</div>
     <div class="small muted">Decided by <b>${esc(x.by)}</b> on ${esc((x.at || "").slice(0, 16).replace("T", " "))} UTC · matched on ${x.match === "path" ? `the same path through ${esc(x.via.join(", "))}` : x.same_advisory ? "this advisory" : "the same package " + esc(x.package)}</div>
     ${x.covers ? `<div class="small muted">Covers <code>${esc(x.covers.advisory)}</code> (${esc(x.covers.severity)}) for ${esc(x.covers.services.join(", "))}</div>` : ""}
     ${x.exposure ? `<div class="small ${x.exposure.changed ? "warn-t" : "ok-t"}">Exposure now: ${esc(x.exposure.summary)}</div>` +
       [...x.exposure.new_paths.map(p => `+ ${x.service} → ${p}`), ...x.exposure.removed_paths.map(p => `− ${x.service} → ${p}`)].slice(0, 4).map(p => `<div class="chain">${esc(p)}</div>`).join("") : ""}
-    ${x.stale_reason && !x.exposure ? `<div class="small warn-t">${esc(x.stale_reason)}</div>` : ""}</div>`).join("");
+    ${decisionNote(x)}${replacesNote(x.replaces)}</div>`).join("");
 }
 function changesCard(r, src) {
   const when = t => esc((t || "").slice(0, 16).replace("T", " ")) + " UTC";
@@ -574,7 +584,8 @@ function changesCard(r, src) {
     ...r.removed_paths.map(x => `<div class="chain ok-t">− ${esc(x)}</div>`),
     ...r.changed_versions.map(x => `<div class="chain">${esc(x.service)}: ${esc(x.before)} → now ${esc(x.after)}</div>`),
     ...r.lockfiles_changed.map(x => `<div class="small">${esc(x.service)} lockfile: <code>${esc(x.before)}</code> → <code>${esc(x.after)}</code></div>`),
-    ...r.decisions_gone_stale.map(x => `<div class="small warn-t">Decision ${esc(x.decision)} (${esc(x.verdict)} by ${esc(x.made_by)}) on ${esc(x.service)} went stale: ${esc(x.why || "")}</div>`)];
+    ...r.decisions_gone_stale.map(x => `<div class="small warn-t">Decision ${esc(x.decision)} (${esc(x.verdict)} by ${esc(x.made_by)}) on ${esc(x.service)} is now ${esc(x.status || "stale")}: ${esc(x.why || "")}</div>`),
+    ...(r.decisions_verified || []).map(x => `<div class="small ok-t">Decision ${esc(x.decision)} (${esc(x.verdict)} by ${esc(x.made_by)}) on ${esc(x.service)}: fix confirmed by the graph, ${esc(x.why || "")}</div>`)];
   return `<div class="card"><h4>What changed since ${when(r.last_look)}<span class="src">${src}</span></h4>${rows.length ? rows.join("") : `<div class="small ok-t">Nothing: same ${r.paths_now} production paths, no lockfile swaps, no decisions gone stale.</div>`}</div>`;
 }
 function finding(ev) {
@@ -596,7 +607,7 @@ function finding(ev) {
       addFinding(`<div class="card"><h4><span class="ok-t">No path found: safe in production</span><span class="src">${src}</span></h4>
         <div class="small muted">${esc(sp.searched)}</div>` + sp.packages.map(pk => `<div class="small" style="margin-top:4px"><b>${esc(pk.package)}</b> affected <code>${esc(pk.affected_ranges.join(" | "))}</code>; installed ${pk.installed.length ? pk.installed.map(x => `<code>${esc(x.version)}</code>`).join(", ") : "nowhere"}</div>`).join("") +
         (sp.dev_only_exposure.length ? `<div class="small muted">Dev tooling only: ${esc(sp.dev_only_exposure.join(", "))}</div>` : "") +
-        (sp.packages.some(pk => pk.installed.length) ? `<form class="naform" data-vuln="${esc(r.vulnerability)}" style="display:flex;gap:6px;margin-top:8px"><input name="person" placeholder="who signs off" required style="flex:1"><button class="btn">Record as not affected</button></form><div class="small naout"></div>` : "") + `</div>`);
+        (sp.packages.some(pk => pk.installed.length) ? `<form class="naform" data-vuln="${esc(r.vulnerability)}" style="display:flex;gap:6px;margin-top:8px"><input name="person" placeholder="who signs off" maxlength="80" required style="flex:1"><button class="btn">Record as not affected</button></form><div class="small naout"></div>` : "") + `</div>`);
     } else {
       const as = r.advisory_source || {};
       addFinding(`<div class="card"><h4>Exposure · ${r.services.length} services<span class="src">${src}</span></h4>` +
@@ -621,9 +632,9 @@ function finding(ev) {
         <ul class="small" style="margin:4px 0;padding-left:18px">${s.actions.map(a => `<li>${esc(a.action)}${a.verification ? `<span class="vb ${esc(a.verification.status)}">${esc(a.verification.status)}</span>
           <ul class="checks">${a.verification.checks.map(c => `<li>${c.ok === true ? "✓" : c.ok === false ? "✗" : "?"} ${esc(c.detail)}</li>`).join("")}</ul>` : ""}</li>`).join("")}</ul></div>`).join("") + `</div>`);
   } else if (src === "check_drift") {
-    addFinding(`<div class="card"><h4>Drift check<span class="src">${src}</span></h4>${r.length ? r.map(x => `<div class="small warn-t">${esc(x.decision)} on ${esc(x.service)} is stale: ${esc((x.new_paths || []).join("; "))}</div>`).join("") : `<div class="small ok-t">All decisions still match today's graph.</div>`}</div>`);
+    addFinding(`<div class="card"><h4>Drift check<span class="src">${src}</span></h4>${r.length ? `<div class="small">${r.map(changeLine).join("")}</div>` : `<div class="small ok-t">All decisions still match today's graph.</div>`}</div>`);
   } else if (src === "record_decision") {
-    addFinding(`<div class="card"><h4>Decision saved<span class="src">${src}</span></h4><div class="small">${esc(r.verdict)} for ${esc(r.service)} · ${esc(r.id)}</div></div>`);
+    addFinding(`<div class="card"><h4>Decision saved<span class="src">${src}</span></h4><div class="small">${esc(r.verdict)} for ${esc(r.service)} · ${esc(r.decision)} · <span class="sev ${esc(r.status)}">${esc(r.status)}</span></div>${decisionNote({ status: r.status, stale_reason: r.status_reason })}${r.supersedes && r.supersedes.length ? `<div class="small muted">Supersedes ${esc(r.supersedes.join(", "))}</div>` : ""}</div>`);
   } else if (src === "draft_issue") {
     addFinding(`<div class="card"><h4>Issue draft<span class="src">${src}</span></h4><div class="small"><b>${esc(r.title)}</b></div>
       <button class="btn" style="margin-top:6px" data-issue="${esc(ev.input.service)}" data-vuln="${esc(ev.input.vulnerability_id)}">Review and open…</button></div>`);
@@ -666,7 +677,7 @@ $("#findings").addEventListener("submit", async e => {
 function groupDecisions(list) {
   const out = new Map();
   for (const d of list) {
-    const k = [d.vuln, d.verdict, d.reason, d.person, d.status, d.stale_reason].join("\u0000");
+    const k = [d.vuln, d.verdict, d.reason, d.person, d.status, d.stale_reason, d.replaces.map(o => o.id).join()].join("\u0000");
     if (!out.has(k)) out.set(k, { ...d, services: [] });
     out.get(k).services.push(d.service);
     if (d.exposure && d.exposure.changed) out.get(k).exposure = d.exposure;  // a sign-off shows its most changed service
@@ -675,16 +686,18 @@ function groupDecisions(list) {
 }
 async function loadDecisions() {
   const box = $("#decisions"); box.innerHTML = `<div class="small muted">Loading…</div>`;
-  const [list, scen] = await Promise.all([api("/api/decisions"), api("/api/scenarios")]);
+  const [all, scen] = await Promise.all([api("/api/decisions"), api("/api/scenarios")]);
+  // decisions in force, each with the earlier ones it superseded (kept as history, D-051)
+  const list = all.filter(d => d.status !== "superseded").map(d => ({ ...d, replaces: all.filter(o => o.superseded_by === d.id).map(o => ({ ...o, by: o.person })) }));
   box.innerHTML = scen.map(s => `<div class="card"><h4>Simulate a deploy<span class="src">${s.active ? "deployed" : "not deployed"}</span></h4>
       <div class="small"><b>${esc(s.title)}.</b> ${esc(s.description)}</div>
       <div style="display:flex;gap:8px;margin-top:8px"><button class="btn primary" data-scen="${esc(s.id)}" ${s.active ? "disabled" : ""}>Deploy</button><button class="btn" data-scen="${esc(s.id)}" data-rollback="1" ${s.active ? "" : "disabled"}>Roll back</button></div>
-      ${list.some(d => d.service === s.service) ? "" : `<div class="small muted" style="margin-top:6px">Tip: record a decision for ${esc(s.service)} first (e.g. on GHSA-9wv6-86v2-598j), then deploy and watch it go stale.</div>`}</div>`).join("") +
-    `<div id="deployout"></div><div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><b class="small">${list.length} decisions in the graph</b><button class="btn" style="margin-left:auto" id="drift">Re-check for drift</button></div><div id="driftout"></div>` +
-    (list.length ? groupDecisions(list).map(d => `<div class="card"><h4><span class="sev ${d.status === "stale" ? "MODERATE" : ""}">${esc(d.status)}</span>${esc(d.verdict)} · ${esc(d.services.join(", "))}</h4>${d.stale_reason ? `<div class="small warn-t">${esc(d.stale_reason)}</div>` : ""}<div class="small mono">${esc(d.vuln)}</div><div class="small">${esc(d.reason)}</div><div class="small muted">${esc(d.person)} · ${esc((d.at || "").slice(0, 16).replace("T", " "))} UTC</div>${d.exposure && !d.stale_reason ? `<div class="small ${d.exposure.changed ? "warn-t" : "ok-t"}">Exposure now: ${esc(d.exposure.summary)}</div>` : ""}</div>`).join("") : `<div class="small muted">No decisions yet. Tell the agent what you decided, and who decided it.</div>`) +
+      ${list.some(d => d.service === s.service) ? "" : `<div class="small muted" style="margin-top:6px">Tip: record a decision for ${esc(s.service)} first (${esc(s.tip || "e.g. on GHSA-9wv6-86v2-598j, then deploy and watch it go stale")}).</div>`}</div>`).join("") +
+    `<div id="deployout"></div><div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><b class="small">${list.length} decision${list.length === 1 ? "" : "s"} in force${all.length > list.length ? ` <span class="muted">(${all.length - list.length} superseded)</span>` : ""}</b><button class="btn" style="margin-left:auto" id="drift">Re-check for drift</button></div><div id="driftout"></div>` +
+    (list.length ? groupDecisions(list).map(d => `<div class="card"><h4><span class="sev ${esc(d.status)}">${esc(d.status)}</span>${esc(d.verdict)} · ${esc(d.services.join(", "))}</h4>${decisionNote(d)}<div class="small mono">${esc(d.vuln)}</div><div class="small">${esc(d.reason)}</div><div class="small muted">${esc(d.person)} · ${esc((d.at || "").slice(0, 16).replace("T", " "))} UTC</div>${replacesNote(d.replaces)}${d.exposure && !d.stale_reason ? `<div class="small ${d.exposure.changed ? "warn-t" : "ok-t"}">Exposure now: ${esc(d.exposure.summary)}</div>` : ""}</div>`).join("") : `<div class="small muted">No decisions yet. Tell the agent what you decided, and who decided it.</div>`) +
     (T.vuln ? `<h4 class="small" style="margin:14px 0 0">Record a decision on ${esc(T.vuln)}</h4><form class="form" id="decform">
-      <input name="service" placeholder="service, e.g. storefront" required><select name="verdict"><option>risk_accepted</option><option>not_affected</option><option>fix_planned</option><option>fixed</option></select>
-      <input name="person" placeholder="who decided" required><textarea name="reason" rows="2" placeholder="why" required></textarea><button class="btn primary">Save to graph</button></form>` : "");
+      <input name="service" placeholder="service, e.g. storefront" maxlength="100" required><select name="verdict"><option>risk_accepted</option><option>not_affected</option><option>fix_planned</option><option>fixed</option></select>
+      <input name="person" placeholder="who decided" maxlength="80" required><textarea name="reason" rows="2" placeholder="why" maxlength="1000" required></textarea><button class="btn primary">Save to graph</button></form>` : "");
 }
 $("#decisions").addEventListener("click", async e => {
   const b = e.target.closest("[data-scen]"); if (!b) return;
@@ -693,15 +706,14 @@ $("#decisions").addEventListener("click", async e => {
     const r = await api(`/api/scenarios/${encodeURIComponent(b.dataset.scen)}${b.dataset.rollback ? "?rollback=true" : ""}`, { method: "POST" });
     await loadDecisions();
     $("#deployout").innerHTML = `<div class="card small">Loaded ${esc(r.lockfile)} into ${esc(r.service)} (${r.installs} installs) in ${r.seconds}s. ` +
-      (r.drift.length ? r.drift.map(x => `<div class="warn-t">${esc(x.decision)} (${esc(x.verdict)} by ${esc(x.made_by)}) on ${esc(x.vulnerability)} is now stale: ${esc(x.new_paths.join("; "))}</div>`).join("") : "") +
-      (r.recovered.length ? r.recovered.map(x => `<div class="ok-t">${esc(x.decision)} (${esc(x.verdict)}) on ${esc(x.vulnerability)} matches the graph again.</div>`).join("") : "") +
+      r.drift.map(changeLine).join("") + r.recovered.map(changeLine).join("") +
       (!r.drift.length && !r.recovered.length ? `<span class="ok-t">No decision changed.</span>` : "") + `</div>`;
   } catch (err) { $("#deployout").innerHTML = `<div class="card small warn-t">${esc(err.message)}</div>`; }
 });
 $("#decisions").addEventListener("click", async e => {
   if (e.target.id !== "drift") return;
   const r = await api("/api/drift", { method: "POST" });
-  $("#driftout").innerHTML = r.length ? r.map(x => `<div class="card small warn-t">${esc(x.decision)} on ${esc(x.service)} is now stale: ${esc((x.new_paths || []).join("; "))}</div>`).join("") : `<div class="card small ok-t">All decisions still match today's graph.</div>`;
+  $("#driftout").innerHTML = r.length ? `<div class="card small">${r.map(changeLine).join("")}</div>` : `<div class="card small ok-t">All decisions still match today's graph.</div>`;
 });
 $("#decisions").addEventListener("submit", async e => {
   e.preventDefault(); const f = Object.fromEntries(new FormData(e.target));
@@ -717,7 +729,7 @@ async function run() {
   try {
     const resp = await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: S.session, message: q, mode: S.mode, disabled_tools: [...S.disabled] }) });
-    if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);
+    if (!resp.ok) throw new Error(errorText((await resp.json().catch(() => ({}))).detail) || resp.statusText);
     S.session = resp.headers.get("X-Session") || S.session; loadSessions();
     const reader = resp.body.getReader(), dec = new TextDecoder(); let buf = "";
     for (;;) {

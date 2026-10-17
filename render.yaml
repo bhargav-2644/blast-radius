@@ -23,5 +23,7 @@ services:
         value: "300"
       - key: AGENT_RUNS_PER_HOUR_PER_IP
         value: "15"
+      - key: WRITES_PER_HOUR_PER_IP   # saved decisions, simulated deploys and issues
+        value: "30"
       - key: MAX_LIVE_SESSIONS
         value: "3"   # each live session holds a ~90 MB tool process; fits the free 512 MB plan

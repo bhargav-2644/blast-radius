@@ -14,3 +14,9 @@ Added later on 2026-10-16 (explainability, D-046 to D-050):
 - `package_advisories.cypher`: every advisory on the packages a plan touches, used to check that a proposed fix version is not itself affected (D-048).
 - `risk_board.cypher` now takes `$id` and returns the factors behind each score (D-049).
 - `advisory_signatures.cypher`, `save_investigation.cypher`, `investigations.cypher`: one `Investigation` snapshot per advisory, compared on the next look to say what changed (D-050).
+
+Added on 2026-10-17 (decision lifecycle, D-051):
+- `record_decision.cypher` takes the status the graph gives the new decision and supersedes the decision in force on the same advisory and service (`SUPERSEDES` edge, `superseded_by`).
+- `recall_precedent.cypher` and `path_precedent.cypher` return only decisions in force, each with the decisions it `replaces`.
+- `risk_board.cypher` ignores superseded decisions and ranks `disputed` (says fixed, still exposed) like `stale`.
+- `current_decisions.cypher` returns `superseded_by`, oldest first.
