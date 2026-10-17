@@ -44,7 +44,7 @@ The demo company's 14 services are real public repos at pinned versions (lockfil
 3. Fill in `FALKORDB_HOST`, `FALKORDB_PORT`, `FALKORDB_USERNAME`, `FALKORDB_PASSWORD` (set `FALKORDB_SSL=true` if your instance requires TLS) and, optionally, `ANTHROPIC_API_KEY`.
 4. On first start the container builds the graph in a few seconds from the committed data (`data/lockfiles`, `data/osv/npm-snapshot.zip`). An existing graph is left alone, so recorded decisions survive restarts.
 
-Public-demo guards: agent runs are limited per IP per hour and per day (`AGENT_RUNS_PER_HOUR_PER_IP`, `AGENT_RUNS_PER_DAY`), after which runs fall back to the fixed pipeline. Idle sessions beyond `MAX_LIVE_SESSIONS` release their tool process. Leave `GITHUB_TOKEN` unset on a public deploy: the "Open issue" button then shows the draft instead of filing it.
+Public-demo guards: agent runs are limited per IP per hour and per day (`AGENT_RUNS_PER_HOUR_PER_IP`, `AGENT_RUNS_PER_DAY`), after which runs fall back to the fixed pipeline. Writes to the shared graph (saving decisions, simulated deploys, issues) are limited per IP per hour (`WRITES_PER_HOUR_PER_IP`), and every text field has a length cap. Idle sessions beyond `MAX_LIVE_SESSIONS` release their tool process. Leave `GITHUB_TOKEN` unset on a public deploy: the "Open issue" button then shows the draft instead of filing it.
 
 Run the same container locally: `docker compose --profile app up --build`.
 

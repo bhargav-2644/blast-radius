@@ -226,7 +226,7 @@ dialog pre { white-space: pre-wrap; background: var(--sunk); padding: 10px; bord
     </div>
     <div class="stream" id="stream"><div class="col" id="feed"></div></div>
     <div class="composer"><div class="col">
-      <div class="box"><textarea id="input" rows="1" placeholder="Ask about an advisory, e.g. Are we affected by CVE-2025-7783?"></textarea><button class="send" id="send">Run</button></div>
+      <div class="box"><textarea id="input" rows="1" maxlength="4000" placeholder="Ask about an advisory, e.g. Are we affected by CVE-2025-7783?"></textarea><button class="send" id="send">Run</button></div>
       <div class="hint"><span>Every step the agent takes, and every Cypher query behind it, streams here as it happens.</span><span>Enter to run · Shift+Enter for a new line</span></div>
     </div></div>
   </main>
@@ -257,6 +257,8 @@ const replacesNote = list => list && list.length ? `<div class="small muted">Rep
 const changeLine = x => x.status === "verified" ? `<div class="ok-t">${esc(x.decision)} (${esc(x.verdict)} by ${esc(x.made_by)}) on ${esc(x.vulnerability)} for ${esc(x.service)}: fix confirmed, ${esc(x.why)}.</div>`
   : x.status === "current" ? `<div class="ok-t">${esc(x.decision)} (${esc(x.verdict)}) on ${esc(x.vulnerability)} for ${esc(x.service)} matches the graph again.</div>`
   : `<div class="warn-t">${esc(x.decision)} (${esc(x.verdict)} by ${esc(x.made_by)}) on ${esc(x.vulnerability)} for ${esc(x.service)} is now ${esc(x.status)}: ${esc(x.why)}</div>`;
+// FastAPI sends a string, or for invalid input a list of {loc, msg}
+const errorText = d => Array.isArray(d) ? d.map(e => `${(e.loc || []).slice(-1)[0] || "input"}: ${e.msg}`).join("; ") : d;
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const fmt = n => Number(n || 0).toLocaleString();
@@ -282,7 +284,7 @@ function resetState() {
 
 async function api(path, opts) {
   const r = await fetch(path, opts && opts.body ? { method: "POST", headers: {"Content-Type": "application/json"}, ...opts } : opts);
-  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  if (!r.ok) throw new Error(errorText((await r.json().catch(() => ({}))).detail) || r.statusText);
   return r.json();
 }
 
@@ -605,7 +607,7 @@ function finding(ev) {
       addFinding(`<div class="card"><h4><span class="ok-t">No path found: safe in production</span><span class="src">${src}</span></h4>
         <div class="small muted">${esc(sp.searched)}</div>` + sp.packages.map(pk => `<div class="small" style="margin-top:4px"><b>${esc(pk.package)}</b> affected <code>${esc(pk.affected_ranges.join(" | "))}</code>; installed ${pk.installed.length ? pk.installed.map(x => `<code>${esc(x.version)}</code>`).join(", ") : "nowhere"}</div>`).join("") +
         (sp.dev_only_exposure.length ? `<div class="small muted">Dev tooling only: ${esc(sp.dev_only_exposure.join(", "))}</div>` : "") +
-        (sp.packages.some(pk => pk.installed.length) ? `<form class="naform" data-vuln="${esc(r.vulnerability)}" style="display:flex;gap:6px;margin-top:8px"><input name="person" placeholder="who signs off" required style="flex:1"><button class="btn">Record as not affected</button></form><div class="small naout"></div>` : "") + `</div>`);
+        (sp.packages.some(pk => pk.installed.length) ? `<form class="naform" data-vuln="${esc(r.vulnerability)}" style="display:flex;gap:6px;margin-top:8px"><input name="person" placeholder="who signs off" maxlength="80" required style="flex:1"><button class="btn">Record as not affected</button></form><div class="small naout"></div>` : "") + `</div>`);
     } else {
       const as = r.advisory_source || {};
       addFinding(`<div class="card"><h4>Exposure · ${r.services.length} services<span class="src">${src}</span></h4>` +
@@ -694,8 +696,8 @@ async function loadDecisions() {
     `<div id="deployout"></div><div style="display:flex;gap:8px;align-items:center;margin-bottom:10px"><b class="small">${list.length} decision${list.length === 1 ? "" : "s"} in force${all.length > list.length ? ` <span class="muted">(${all.length - list.length} superseded)</span>` : ""}</b><button class="btn" style="margin-left:auto" id="drift">Re-check for drift</button></div><div id="driftout"></div>` +
     (list.length ? groupDecisions(list).map(d => `<div class="card"><h4><span class="sev ${esc(d.status)}">${esc(d.status)}</span>${esc(d.verdict)} · ${esc(d.services.join(", "))}</h4>${decisionNote(d)}<div class="small mono">${esc(d.vuln)}</div><div class="small">${esc(d.reason)}</div><div class="small muted">${esc(d.person)} · ${esc((d.at || "").slice(0, 16).replace("T", " "))} UTC</div>${replacesNote(d.replaces)}${d.exposure && !d.stale_reason ? `<div class="small ${d.exposure.changed ? "warn-t" : "ok-t"}">Exposure now: ${esc(d.exposure.summary)}</div>` : ""}</div>`).join("") : `<div class="small muted">No decisions yet. Tell the agent what you decided, and who decided it.</div>`) +
     (T.vuln ? `<h4 class="small" style="margin:14px 0 0">Record a decision on ${esc(T.vuln)}</h4><form class="form" id="decform">
-      <input name="service" placeholder="service, e.g. storefront" required><select name="verdict"><option>risk_accepted</option><option>not_affected</option><option>fix_planned</option><option>fixed</option></select>
-      <input name="person" placeholder="who decided" required><textarea name="reason" rows="2" placeholder="why" required></textarea><button class="btn primary">Save to graph</button></form>` : "");
+      <input name="service" placeholder="service, e.g. storefront" maxlength="100" required><select name="verdict"><option>risk_accepted</option><option>not_affected</option><option>fix_planned</option><option>fixed</option></select>
+      <input name="person" placeholder="who decided" maxlength="80" required><textarea name="reason" rows="2" placeholder="why" maxlength="1000" required></textarea><button class="btn primary">Save to graph</button></form>` : "");
 }
 $("#decisions").addEventListener("click", async e => {
   const b = e.target.closest("[data-scen]"); if (!b) return;
@@ -727,7 +729,7 @@ async function run() {
   try {
     const resp = await fetch("/api/run", { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ session_id: S.session, message: q, mode: S.mode, disabled_tools: [...S.disabled] }) });
-    if (!resp.ok) throw new Error((await resp.json().catch(() => ({}))).detail || resp.statusText);
+    if (!resp.ok) throw new Error(errorText((await resp.json().catch(() => ({}))).detail) || resp.statusText);
     S.session = resp.headers.get("X-Session") || S.session; loadSessions();
     const reader = resp.body.getReader(), dec = new TextDecoder(); let buf = "";
     for (;;) {

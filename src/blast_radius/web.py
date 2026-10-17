@@ -10,12 +10,13 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Annotated
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from blast_radius import analysis, config, memory
 from blast_radius.agent import agent_available
@@ -30,6 +31,10 @@ MAX_LIVE_SESSIONS = int(os.getenv("MAX_LIVE_SESSIONS", "12"))
 AGENT_RUNS_PER_HOUR_PER_IP = int(os.getenv("AGENT_RUNS_PER_HOUR_PER_IP", "15"))
 AGENT_RUNS_PER_DAY = int(os.getenv("AGENT_RUNS_PER_DAY", "300"))
 agent_runs: list[tuple[float, str]] = []  # (time, client ip) of recent agent-mode runs
+# Writes to the shared graph (decisions, simulated deploys, issues) are capped per IP too (D-052),
+# so one visitor can't flood the Decisions tab judges see.
+WRITES_PER_HOUR_PER_IP = int(os.getenv("WRITES_PER_HOUR_PER_IP", "30"))
+writes: list[tuple[float, str]] = []  # (time, client ip) of recent writes
 
 
 @asynccontextmanager
@@ -127,16 +132,32 @@ def advisory(vuln_id: str, include_dev: bool = False):
             "precedent": memory.recall_precedent(vuln_id), "graph": _graph_view(vuln_id, exposure, customers)}
 
 
+# Length caps on what visitors can write into the shared graph (D-052)
+Id = Annotated[str, Field(min_length=1, max_length=100)]
+Person = Annotated[str, Field(min_length=1, max_length=80)]
+
+
 class DecisionIn(BaseModel):
-    vulnerability_id: str
-    service: str
-    verdict: str
-    reason: str
-    person: str
+    vulnerability_id: Id
+    service: Id
+    verdict: str = Field(min_length=1, max_length=20)
+    reason: str = Field(min_length=1, max_length=1000)
+    person: Person
+
+
+def _write_allowed(request: Request) -> None:
+    """Raise 429 once this client has used its hourly budget of writes to the shared graph."""
+    now, ip = time.time(), _client_ip(request)
+    writes[:] = [(t, a) for t, a in writes if now - t < 3600]
+    if sum(1 for _, a in writes if a == ip) >= WRITES_PER_HOUR_PER_IP:
+        raise HTTPException(429, "This demo's hourly limit on saved decisions, deploys and issues is used up; "
+                                 "try again later")
+    writes.append((now, ip))
 
 
 @app.post("/api/decisions")
-def record(d: DecisionIn):
+def record(d: DecisionIn, request: Request):
+    _write_allowed(request)
     try:
         return memory.record_decision(d.vulnerability_id, d.service, d.verdict, d.reason, d.person)
     except ValueError as e:
@@ -144,12 +165,13 @@ def record(d: DecisionIn):
 
 
 class NotAffectedIn(BaseModel):
-    person: str
+    person: Person
 
 
 @app.post("/api/advisory/{vuln_id}/not_affected")
-def not_affected(vuln_id: str, body: NotAffectedIn):
+def not_affected(vuln_id: str, body: NotAffectedIn, request: Request):
     """Record the proof of safety as not_affected decisions (button on the "No path found" card)."""
+    _write_allowed(request)
     try:
         return memory.record_not_affected(vuln_id, body.person)
     except ValueError as e:
@@ -181,11 +203,12 @@ def scenarios():
 
 
 @app.post("/api/scenarios/{scenario_id}")
-def simulate_deploy(scenario_id: str, rollback: bool = False):
+def simulate_deploy(scenario_id: str, request: Request, rollback: bool = False):
     """Swap one service's lockfile in place (or roll it back) and report which decisions drifted."""
     s = SCENARIOS.get(scenario_id)
     if not s:
         raise HTTPException(404, f"unknown scenario {scenario_id}")
+    _write_allowed(request)
     lock = DATA / "lockfiles" / f"{s['service']}.json.gz" if rollback else DATA / "scenarios" / s["lockfile"]
     if not deploy_lock.acquire(timeout=60):
         raise HTTPException(409, "another deploy is running")
@@ -197,13 +220,14 @@ def simulate_deploy(scenario_id: str, rollback: bool = False):
 
 
 class IssueIn(BaseModel):
-    vulnerability_id: str
-    service: str
+    vulnerability_id: Id
+    service: Id
 
 
 @app.post("/api/issues")
-def open_issue(i: IssueIn):
+def open_issue(i: IssueIn, request: Request):
     """Opens the drafted issue in our own repo. Called only from the approve button (D-012, D-027)."""
+    _write_allowed(request)
     draft = json.loads(draft_issue(i.vulnerability_id, i.service))
     draft = draft.get("result", draft)
     if "error" in draft:
@@ -221,8 +245,8 @@ def open_issue(i: IssueIn):
 
 
 class RunIn(BaseModel):
-    session_id: str | None = None
-    message: str
+    session_id: str | None = Field(default=None, max_length=40)
+    message: str = Field(min_length=1, max_length=4000)  # each question is kept in the graph (D-029)
     mode: str = "auto"            # auto | agent | pipeline
     disabled_tools: list[str] = []
 
